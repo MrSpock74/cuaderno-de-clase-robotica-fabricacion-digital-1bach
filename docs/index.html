@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cuaderno de clase RyFD · evaluación por criterios</title>
+<meta name="description" content="Cuaderno de clase del profesorado para evaluar por criterios una materia de diseño propio (Robótica y Fabricación Digital I), con conexión a Google Classroom. Aplicación de Google Apps Script.">
+<style>
+  :root{
+    --bg:#eef4f7; --card:#ffffff; --ink:#1f2f3a; --muted:#566872;
+    --blue:#1f6f9a; --blue-d:#154f70; --cyan:#27b3c9; --sun:#f0b840; --line:#d6e2e9; --code:#e8f0f5;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#14202a; --card:#1d2d3a; --ink:#e9f1f5; --muted:#a3b6c1; --blue:#6bc0e6; --blue-d:#8fd1ee; --cyan:#4fd0e3; --sun:#f0b840; --line:#2e4252; --code:#243847; }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:900px;margin:0 auto;padding:0 16px}
+  header{padding:56px 0 28px}
+  .tag{display:inline-block;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--blue-d);font-weight:700}
+  h1{font-size:clamp(28px,5vw,42px);line-height:1.15;margin:.3em 0 .4em}
+  .lead{font-size:19px;color:var(--muted);max-width:680px}
+  .btns{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}
+  .btn{display:inline-block;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:600;border:2px solid var(--blue);color:var(--blue-d)}
+  .btn.main{background:var(--blue);color:#fff}
+  @media (prefers-color-scheme: dark){ .btn.main{color:#0d1a22} }
+  nav.toc{display:flex;flex-wrap:wrap;gap:8px 18px;padding:14px 0 0;font-size:15px}
+  nav.toc a{color:var(--blue-d);text-decoration:none;border-bottom:1px dotted var(--blue)}
+  section{padding:30px 0}
+  h2{font-size:27px;margin:0 0 6px}
+  h2 + p.sub{margin:0 0 18px;color:var(--muted)}
+  h3{margin:0 0 6px;font-size:20px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px}
+  .card .meta{display:inline-block;font-size:13px;font-weight:700;color:var(--blue-d);background:var(--code);border-radius:99px;padding:2px 10px;margin-bottom:10px}
+  .card ul{margin:10px 0 0;padding-left:20px;color:var(--muted)}
+  .card li{margin:4px 0}
+  .card p{margin:0 0 6px;color:var(--muted)}
+  .learn{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+  .learn div{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--cyan);border-radius:10px;padding:14px 16px}
+  .learn strong{display:block;margin-bottom:2px}
+  .learn span{color:var(--muted);font-size:16px}
+  .two{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+  .flow{margin:0;padding-left:20px;color:var(--muted)}
+  .flow li{margin:6px 0}
+  ol.steps{counter-reset:s;list-style:none;padding:0;margin:0}
+  ol.steps > li{counter-increment:s;position:relative;padding:0 0 22px 56px}
+  ol.steps > li::before{content:counter(s);position:absolute;left:0;top:0;width:38px;height:38px;border-radius:50%;background:var(--sun);color:#2b2b2b;font-weight:800;display:flex;align-items:center;justify-content:center}
+  ol.steps > li > strong:first-child{display:block;font-size:18px;margin-bottom:2px}
+  ol.steps p{margin:4px 0;color:var(--muted)}
+  code{background:var(--code);border-radius:6px;padding:1px 6px;font-size:.92em}
+  .callout{background:var(--card);border-left:5px solid var(--sun);border-radius:8px;padding:12px 16px;margin:10px 0;color:var(--muted);font-size:16px}
+  .callout b{color:var(--ink)}
+  details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px 18px;margin:10px 0}
+  summary{cursor:pointer;font-weight:600;padding:12px 0}
+  details p{margin:0 0 12px;color:var(--muted)}
+  a{color:var(--blue-d)}
+  footer{border-top:1px solid var(--line);margin-top:30px;padding:26px 0 56px;color:var(--muted);font-size:15px}
+  footer p{margin:6px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <span class="tag">Evaluación por criterios · LOMLOE · Google Apps Script</span>
+  <h1>Cuaderno de clase para una materia de diseño propio</h1>
+  <p class="lead">Un cuaderno del profesorado para evaluar <strong>criterio a criterio</strong> la materia <strong>Robótica y Fabricación Digital I</strong>, que se imparte en el IES Murillo (Sevilla) y que, por ser de diseño propio, no se puede evaluar por criterios en el cuaderno de Séneca.</p>
+  <div class="btns">
+    <a class="btn main" href="#instalar">Cómo instalarlo</a>
+    <a class="btn" href="https://github.com/MrSpock74/cuaderno-de-clase-robotica-fabricacion-digital-1bach">Ver el código en GitHub</a>
+  </div>
+  <nav class="toc" aria-label="Contenido de la página">
+    <a href="#porque">Por qué existe</a>
+    <a href="#hace">Qué hace</a>
+    <a href="#calculo">Cómo calcula la nota</a>
+    <a href="#instalar">Instalación</a>
+    <a href="#adaptar">Adaptarlo</a>
+    <a href="#faq">Preguntas frecuentes</a>
+  </nav>
+</header>
+
+<section id="porque">
+  <h2>Por qué existe</h2>
+  <p class="sub">Una materia propia del centro no figura en el catálogo con el que trabaja el cuaderno del profesorado de Séneca, así que en la práctica no es posible evaluarla por criterios allí. Este cuaderno cubre ese hueco: registra la evaluación competencial y calcula la calificación final con la misma lógica que se aplicaría a una materia del catálogo oficial.</p>
+  <p class="callout"><b>Versión limpia:</b> el repositorio no contiene alumnado, notas, nombres de profesorado ni identificadores de cursos. Todos los datos viven en el Drive de quien lo instala.</p>
+</section>
+
+<section id="hace">
+  <h2>Qué hace</h2>
+  <div class="learn">
+    <div><strong>Evaluación por criterios</strong><span>Registra notas (0–10) por actividad, alumno/a y criterio, con rúbricas de seis niveles.</span></div>
+    <div><strong>Criterios editables</strong><span>Cada actividad puede tener sus propios criterios, también en actividades ya creadas.</span></div>
+    <div><strong>Google Classroom</strong><span>Importa el listado del curso y las notas, y exporta calificaciones como borrador.</span></div>
+    <div><strong>Desglose desde Python</strong><span>Importa el reparto por criterios de la hoja de progreso de los <a href="https://github.com/MrSpock74/cuadernos-interactivos-python-ryfd-1bach">cuadernos interactivos de Python</a>.</span></div>
+    <div><strong>Informes en PDF</strong><span>Genera informes para familias y alumnado.</span></div>
+    <div><strong>Copias de seguridad</strong><span>Copia automática programable en tu Drive.</span></div>
+  </div>
+</section>
+
+<section id="calculo">
+  <h2>Cómo calcula la nota</h2>
+  <p class="sub">Un modelo sencillo y transparente:</p>
+  <div class="card">
+    <ul>
+      <li><strong>Criterio</strong> = media de todas sus evaluaciones.</li>
+      <li><strong>Competencia específica</strong> = 90 % media de sus criterios de contenido + 10 % criterio transversal (T: constancia y autonomía).</li>
+      <li><strong>Nota final</strong> = media de las competencias específicas.</li>
+    </ul>
+  </div>
+  <p class="callout"><b>Datos en tu Drive:</b> el cuaderno guarda su información en un archivo JSON de tu cuenta. No se envía a servidores externos.</p>
+</section>
+
+<section id="instalar">
+  <h2>Instalación paso a paso</h2>
+  <p class="sub">Solo hay que hacerlo una vez. Calcula unos 15 minutos.</p>
+  <ol class="steps">
+    <li><strong>Descarga los archivos</strong>
+      <p>En el <a href="https://github.com/MrSpock74/cuaderno-de-clase-robotica-fabricacion-digital-1bach">repositorio de GitHub</a> pulsa <strong>Code → Download ZIP</strong> y descomprime la carpeta.</p>
+    </li>
+    <li><strong>Crea un proyecto de Apps Script</strong>
+      <p>Entra en <a href="https://script.google.com">script.google.com</a> con tu cuenta del centro y pulsa <strong>Nuevo proyecto</strong>.</p>
+    </li>
+    <li><strong>Pega el código del servidor</strong>
+      <p>Copia el contenido de <code>Code.gs</code> en el archivo de código del proyecto.</p>
+    </li>
+    <li><strong>Crea las pantallas</strong>
+      <p>Con <strong>+ → HTML</strong> crea siete archivos con estos nombres exactos, sin escribir «.html»: <code>index</code>, <code>app</code>, <code>model</code>, <code>ui</code>, <code>estilos</code>, <code>seed</code> y <code>engine</code>, y pega en cada uno el contenido de su archivo.</p>
+    </li>
+    <li><strong>Sustituye el manifiesto</strong>
+      <p>En <strong>Configuración del proyecto</strong> activa «Mostrar el archivo de manifiesto» y pega el contenido de <code>appsscript.json</code> (incluye el servicio de Classroom y los permisos).</p>
+    </li>
+    <li><strong>Autoriza los permisos</strong>
+      <p>Ejecuta la función <code>listCourses</code> una vez y acepta los permisos.</p>
+    </li>
+    <li><strong>Publica la aplicación web</strong>
+      <p><strong>Implementar → Nueva implementación → Aplicación web</strong>, ejecutar como <strong>el usuario que accede</strong>. Cada vez que cambies algo, crea una <strong>nueva versión</strong> de la implementación.</p>
+    </li>
+    <li><strong>Copias de seguridad (opcional)</strong>
+      <p>Ejecuta <code>instalarBackupAutomatico</code> para programar copias automáticas en tu Drive.</p>
+    </li>
+  </ol>
+</section>
+
+<section id="adaptar">
+  <h2>Adaptarlo a otra materia</h2>
+  <p class="sub">Los datos de la materia están en <code>seed.html</code>, dentro del objeto <code>AREAS</code>: competencias específicas, criterios (redacción docente y versión para el alumnado) y criterio transversal. Añade una entrada nueva con el mismo formato para otro curso o materia. La lógica de cálculo está en <code>engine.html</code>.</p>
+</section>
+
+<section id="faq">
+  <h2>Preguntas frecuentes</h2>
+  <details>
+    <summary>¿Sustituye al cuaderno de Séneca?</summary>
+    <p>No. Es un apoyo para las materias que Séneca no permite evaluar por criterios. Las calificaciones finales se trasladan a Séneca como corresponda.</p>
+  </details>
+  <details>
+    <summary>¿Dónde están los datos del alumnado?</summary>
+    <p>En un archivo en tu Drive. Trátalo como datos personales y no lo compartas más de lo necesario.</p>
+  </details>
+  <details>
+    <summary>¿Cómo importo el reparto por criterios de los cuadernos de Python?</summary>
+    <p>Con el botón de importar desglose, pega el enlace de la hoja de progreso; la aplicación detecta la pestaña con las columnas <code>email</code> y <code>desglose_json</code>.</p>
+  </details>
+  <details>
+    <summary>Me pide permisos al importar la hoja.</summary>
+    <p>Ejecuta <code>listCourses</code> en el editor para reautorizar y crea una nueva versión de la implementación.</p>
+  </details>
+</section>
+
+<footer>
+  <p><strong>Manuel Romero Fraidía</strong> · Departamento de Tecnología · IES Murillo, Sevilla, sobre una idea original de ProfeTonino.</p>
+  <p>Licencia <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/deed.es">Creative Commons Atribución-NoComercial-CompartirIgual 4.0 (CC BY-NC-SA 4.0)</a>.</p>
+  <p><a href="https://github.com/MrSpock74/cuaderno-de-clase-robotica-fabricacion-digital-1bach">Código fuente en GitHub</a></p>
+</footer>
+
+</div>
+</body>
+</html>

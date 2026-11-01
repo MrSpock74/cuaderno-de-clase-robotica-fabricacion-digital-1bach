@@ -47,4 +47,6 @@ Los datos de la materia están en `seed.html`, en el objeto `AREAS`: competencia
 
 Hecho con cariño por Manuel Romero Fraidía (IES Murillo), sobre una idea original de ProfeTonino.
 
+Página de presentación: https://mrspock74.github.io/cuaderno-de-clase-robotica-fabricacion-digital-1bach/
+
 Licencia [CC BY-NC-SA 4.0](LICENSE).
