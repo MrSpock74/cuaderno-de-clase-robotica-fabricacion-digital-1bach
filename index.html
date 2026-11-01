@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cuaderno de Robótica y Fabricación Digital</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <?!= include('estilos'); ?>
+</head>
+<body>
+  <header class="top">
+    <div class="logo">RF</div>
+    <h1>Cuaderno de Robótica y Fabricación Digital</h1>
+    <span class="sp"></span>
+    <button title="Importar alumnado, o importar/exportar notas con Google Classroom" onclick="classroomImport()">⿻ Classroom</button>
+    <button title="Descargar una copia de seguridad de todos tus datos (fichero .json)" onclick="App.exportar()">⬇︎ Copia</button>
+    <button title="Guardar ahora mismo una copia de seguridad fechada en tu Drive (además de la automática diaria)" onclick="backupAhora()">☁︎ Backup</button>
+    <button title="Restaurar tus datos desde una copia de seguridad" onclick="document.getElementById('imp').click()">⬆︎ Restaurar</button>
+    <input type="file" id="imp" accept="application/json" style="display:none" onchange="App.importar(event)">
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-v="clases" class="active" title="Tus clases: aquí creas proyectos, actividades y evalúas por criterios" onclick="App.go('clases')">Clases</button>
+    <button data-v="rubricas" title="Banco de rúbricas reutilizables (descriptores por nivel)" onclick="App.go('rubricas')">Rúbricas</button>
+    <button data-v="comparativa" title="Comparar la nota media entre tus distintas clases de la misma materia" onclick="App.go('comparativa')">📊 Comparativa</button>
+    <button data-v="agenda" title="Planificador: agenda semanal/mensual, diario de aula y reuniones" onclick="App.abrirAgenda()">Planificador</button>
+  </nav>
+
+  <main id="app"></main>
+  <div class="toast" id="toast"></div>
+
+  <footer class="pie">
+    <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">
+      <defs><linearGradient id="ptg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#A6461B"/><stop offset=".55" stop-color="#c05a26"/><stop offset="1" stop-color="#1F6F63"/>
+      </linearGradient></defs>
+      <rect width="24" height="24" rx="6" fill="url(#ptg)"/>
+      <g fill="#fff">
+        <circle cx="12" cy="3.9" r="1.05"/>
+        <rect x="11.5" y="4.7" width="1" height="1.8"/>
+        <rect x="5.3" y="8.4" width="1.3" height="2.6" rx="0.5"/>
+        <rect x="17.4" y="8.4" width="1.3" height="2.6" rx="0.5"/>
+        <rect x="6.6" y="6" width="10.8" height="8" rx="2.2"/>
+        <rect x="8" y="15" width="8" height="1.5" rx="0.6"/>
+        <rect x="7" y="17.1" width="10" height="1.5" rx="0.6"/>
+        <rect x="6" y="19.2" width="12" height="1.5" rx="0.6"/>
+      </g>
+      <g fill="#7c3414">
+        <circle cx="9.8" cy="9.9" r="1.15"/>
+        <circle cx="14.2" cy="9.9" r="1.15"/>
+        <rect x="9.5" y="11.8" width="5" height="1.1" rx="0.55"/>
+      </g>
+    </svg>
+    <span>Hecho con cariño por Manuel Romero Fraidía · IES Murillo — sobre una idea original de <span class="marca">ProfeTonino</span></span>
+  </footer>
+
+  <!-- Estado inicial inyectado desde el Drive del docente + almacén respaldado por Drive -->
+  <script>
+    var INITIAL_STATE = <?!= stateJson ?>;
+    (function () {
+      var mem = JSON.stringify(INITIAL_STATE || {});
+      var timer = null, sucio = false;
+      function flush() {
+        if (!sucio) return;
+        sucio = false;
+        google.script.run.withSuccessHandler(function () {}).withFailureHandler(function () { sucio = true; }).saveState(mem);
+      }
+      window.__RYFD_STORE = {
+        getItem: function () { return mem; },
+        setItem: function (k, v) { mem = v; sucio = true; if (timer) clearTimeout(timer); timer = setTimeout(flush, 500); }
+      };
+      window.addEventListener('beforeunload', flush);
+      window.addEventListener('pagehide', flush);
+      document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') flush(); });
+    })();
+  </script>
+
+  <!-- Capas de la app (mismo código probado en local) -->
+  <?!= include('seed'); ?>
+  <?!= include('engine'); ?>
+  <?!= include('model'); ?>
+  <?!= include('ui'); ?>
+  <?!= include('app'); ?>
+
+  <!-- Puente con Classroom (solo en la versión Apps Script) -->
+  <script>
+    window.__CLASSROOM__ = true; // activa los botones de Classroom en la interfaz
+
+    function modalBG(html) {
+      var bg = document.createElement('div'); bg.className = 'modal-bg';
+      bg.innerHTML = '<div class="modal">' + html + '</div>';
+      bg.onclick = function (e) { if (e.target === bg) bg.remove(); };
+      document.body.appendChild(bg); return bg;
+    }
+    function cerrarBG() { var m = document.querySelectorAll('.modal-bg'); for (var i = 0; i < m.length; i++) m[i].remove(); }
+    function cInfo(msg) {
+      cerrarBG();
+      modalBG('<h3>Classroom</h3><div style="font-size:14px;margin:6px 0 12px;white-space:pre-wrap">' + String(msg) + '</div>' +
+        '<div class="acts"><button class="mini" onclick="cerrarBG()">Cerrar</button></div>');
+    }
+    function cargando(txt) { modalBG('<h3>Classroom</h3><div style="font-size:14px;margin:6px 0">' + txt + '</div>'); }
+    function errClassroom(e) { cInfo('Error: ' + (e && e.message ? e.message : e)); }
+    function botonLista(onclick, texto) {
+      return '<button class="ghost" style="display:block;width:100%;margin:6px 0;text-align:left" onclick="' + onclick + '">' + texto + '</button>';
+    }
+
+    // ---- Backup manual (además del disparador diario automático) ----
+    function backupAhora() {
+      cargando('Guardando copia de seguridad…');
+      google.script.run
+        .withSuccessHandler(function () { cInfo('Copia de seguridad guardada en tu Drive, dentro de la carpeta "Copias de seguridad".'); })
+        .withFailureHandler(errClassroom)
+        .backupAutomatico();
+    }
+
+    // ---- Importar alumnado → crea clase (botón de la cabecera) ----
+    function classroomImport() {
+      cargando('Cargando tus cursos…');
+      google.script.run.withSuccessHandler(function (cursos) {
+        cerrarBG();
+        if (!cursos || !cursos.length) return cInfo('No hay cursos activos en tu Classroom.');
+        modalBG('<h3>Importar alumnado de Classroom</h3>' +
+          cursos.map(function (c) { return botonLista('classroomImportar(\'' + c.id + '\',\'' + c.name.replace(/'/g, '') + '\')', c.name); }).join('') +
+          '<div class="acts"><button class="mini" onclick="cerrarBG()">Cerrar</button></div>');
+      }).withFailureHandler(errClassroom).listCourses();
+    }
+    function classroomImportar(courseId, nombreCurso) {
+      cargando('Cargando alumnado…');
+      google.script.run.withSuccessHandler(function (roster) {
+        cerrarBG();
+        window.__pendingRoster = { courseId: courseId, alumnos: roster || [] };
+        var areaOpts = Object.keys(window.Seed.AREAS).map(function (a) { return '<option value="' + a + '">' + window.Seed.AREAS[a].nombre + '</option>'; }).join('');
+        modalBG('<h3>Crear clase desde Classroom</h3>' +
+          '<div style="color:#6b7280;font-size:13px;margin-bottom:8px">' + (roster || []).length + ' alumnos/as importados. Ponle un nombre claro (p. ej. «1.º Bach A»).</div>' +
+          '<label class="f">Nombre de la clase</label><input class="t" id="cc-nom" value="' + String(nombreCurso || '').replace(/"/g, "&quot;") + '">' +
+          '<label class="f">Asignatura</label><select class="t" id="cc-area">' + areaOpts + '</select>' +
+          '<div class="acts"><button class="mini" onclick="cerrarBG()">Cancelar</button><button class="primary" onclick="crearClaseClassroom()">Crear clase</button></div>');
+      }).withFailureHandler(errClassroom).importRoster(courseId);
+    }
+    function crearClaseClassroom() {
+      var area = document.getElementById('cc-area').value;
+      var nom = (document.getElementById('cc-nom').value || '').trim() || window.Seed.AREAS[area].nombre;
+      var p = window.__pendingRoster;
+      cerrarBG();
+      var cid = window.Model.addClaseConAlumnado(nom, area, window.Seed.AREAS[area].color || '#1f7a5c', p.alumnos, p.courseId);
+      App.openClase(cid);
+    }
+
+    // ---- Texto con los criterios evaluados, para añadir al final de las instrucciones ----
+    function criteriosTexto(a, c) {
+      if (!a.criterios || !a.criterios.length) return '';
+      var idx = window.UI.critIndex(c.area);
+      var lineas = a.criterios.map(function (cod) {
+        var info = idx[cod];
+        return '• ' + cod + ' — ' + (info ? info.doc : '');
+      });
+      return '\n\nCriterios evaluados en esta tarea:\n' + lineas.join('\n');
+    }
+
+    // ---- Elegir una tarea del curso (para importar o exportar notas) ----
+    function elegirTarea(courseId, titulo, cb) {
+      cargando('Buscando tareas del curso…');
+      google.script.run.withSuccessHandler(function (tareas) {
+        cerrarBG();
+        if (!tareas || !tareas.length) return cInfo('Este curso no tiene tareas en Classroom.');
+        modalBG('<h3>' + titulo + '</h3>' +
+          tareas.map(function (t) { return botonLista('window.__pickCW(\'' + t.id + '\')', t.title + (t.maxPoints ? ' · /' + t.maxPoints : '') + (t.state === 'DRAFT' ? ' <span style="color:#b45309">(borrador)</span>' : '')); }).join('') +
+          '<div class="acts"><button class="mini" onclick="cerrarBG()">Cancelar</button></div>');
+        window.__pickCW = function (cwId) { cerrarBG(); cb(cwId); };
+      }).withFailureHandler(errClassroom).listCoursework(courseId);
+    }
+
+    // ---- Importar el desglose por criterios que calcula la app de Python (lee su hoja) ----
+    App.cImportDesglose = function (actId, incluirProvisionales) {
+      var a = window.Model.actividad(actId), c = window.Model.clase(window.Model.claseIdDe(a));
+      if (!c || !c.courseId) return cInfo('Esta clase no viene de Classroom.');
+      function lanzar(hojaId) {
+        cargando('Leyendo el desglose de la app de Python…');
+        google.script.run.withSuccessHandler(function (res) {
+          cerrarBG();
+          window.Model.setActividadFuenteDesglose(actId, hojaId);
+          var r = window.Model.importarDesglose(actId, res.items, !!incluirProvisionales);
+          App.openActividad(actId);
+          var msg = 'Importado el desglose de ' + r.importados + ' alumnos/as.';
+          if (r.provisionales) msg += '\n' + r.provisionales + ' siguen con nota provisional (falta valorar su reflexión de IA) y no se han importado.';
+          if (r.sinDatos) msg += '\n' + r.sinDatos + ' alumnos/as sin desglose guardado todavía.';
+          if (res.sinCorreo) msg += '\n' + res.sinCorreo + ' filas de la hoja no coinciden con nadie del curso de Classroom.';
+          if (r.sinCriterio.length) msg += '\nOjo: la app calcula también ' + r.sinCriterio.join(', ') + ', que no están en los criterios de esta actividad (pulsa «✏️ Criterios» para añadirlos).';
+          cInfo(msg);
+        }).withFailureHandler(errClassroom).leerDesglose(c.courseId, hojaId);
+      }
+      if (a.fuenteDesglose) return lanzar(a.fuenteDesglose);
+      modalBG('<h3>Importar desglose por criterios</h3>' +
+        '<div style="font-size:13.5px;margin:6px 0">Pega el enlace (o el id) de la hoja de cálculo «Progreso_RFD1_Python» que usa la app de Python. Solo hace falta la primera vez.</div>' +
+        '<input class="t" id="desg-url" placeholder="https://docs.google.com/spreadsheets/d/…">' +
+        '<div class="acts"><button class="mini" onclick="cerrarBG()">Cancelar</button>' +
+        '<button class="primary" onclick="App.__okDesglose()">Importar</button></div>');
+      App.__okDesglose = function () {
+        var v = document.getElementById('desg-url').value.trim();
+        if (!v) return;
+        var m = v.match(/\/d\/([a-zA-Z0-9-_]+)/);
+        cerrarBG();
+        lanzar(m ? m[1] : v);
+      };
+    };
+
+    // ---- Importar notas: usa la tarea vinculada si ya existe; si no, deja elegir y la recuerda ----
+    App.cImportNotas = function (actId) {
+      var a = window.Model.actividad(actId), c = window.Model.clase(window.Model.claseIdDe(a));
+      if (!c || !c.courseId) return cInfo('Esta clase no viene de Classroom.');
+      if (a.fuenteDesglose && !confirm('Esta actividad recibe sus notas por criterio desde la app de Python. Importar la nota global de Classroom pondría el mismo valor en todos los criterios y machacaría el desglose. ¿Seguro que quieres hacerlo? (Para traer el desglose usa «📥 Importar desglose por criterios».)')) return;
+
+      function hacerImport(cwId) {
+        cargando('Importando notas…');
+        google.script.run.withSuccessHandler(function (res) {
+          cerrarBG();
+          var porId = {}; (res.grades || []).forEach(function (g) { porId[g.classroomId] = g.nota; });
+          var n = 0;
+          window.Model.alumnosDe(c.id).forEach(function (al) {
+            if (al.classroomId && porId[al.classroomId] != null) {
+              (a.criterios || []).forEach(function (cod) { window.Model.setEval(actId, al.id, cod, porId[al.classroomId]); });
+              n++;
+            }
+          });
+          window.Model.setActividadCourseWork(actId, cwId);
+          App.openActividad(actId);
+          cInfo('Importadas ' + n + ' notas (normalizadas a /10).');
+        }).withFailureHandler(errClassroom).importGrades(c.courseId, cwId);
+      }
+
+      if (a.courseWorkId) hacerImport(a.courseWorkId);
+      else elegirTarea(c.courseId, 'Importar notas de…', hacerImport);
+    };
+
+    // ---- Exportar notas: si ya está vinculada, actualiza la misma tarea (sin preguntar);
+    // si no, crea una nueva la primera vez y a partir de ahí queda vinculada ----
+    App.cExportNotas = function (actId) {
+      var a = window.Model.actividad(actId), c = window.Model.clase(window.Model.claseIdDe(a));
+      if (!c || !c.courseId) return cInfo('Esta clase no viene de Classroom.');
+      var proy = a.proyectoId ? window.Model.proyecto(a.proyectoId) : null;
+      var topicId = (proy && proy.topicId) ? proy.topicId : null;
+      var grades = [];
+      window.Model.alumnosDe(c.id).forEach(function (al) {
+        if (!al.classroomId) return;
+        var nota = window.Model.notaActividad(actId, al.id);
+        if (nota != null) grades.push({ classroomId: al.classroomId, nota: nota });
+      });
+      if (!grades.length) return cInfo('No hay notas que exportar en esta actividad.');
+
+      function hacerExport(descripcion, borrador) {
+        cargando(a.courseWorkId ? 'Actualizando la tarea vinculada…' : 'Creando tarea y exportando notas…');
+        google.script.run.withSuccessHandler(function (res) {
+          cerrarBG();
+          window.Model.setActividadCourseWork(actId, res.courseWorkId);
+          App.openActividad(actId);
+          cInfo((a.courseWorkId ? 'Actualizada la tarea vinculada' : 'Creada la tarea «' + a.nombre + '»' + (borrador ? ' (como borrador)' : '')) +
+            (borrador ? '. Al ser borrador, Classroom aún no acepta notas — public\u00edcala cuando quieras y vuelve a exportar para volcarlas.' :
+              (' y exportadas ' + res.publicadas + ' notas (sobre ' + res.maxPoints + ').')));
+        }).withFailureHandler(errClassroom).exportGrades(c.courseId, a.courseWorkId || null, a.nombre, grades, descripcion || '', !!borrador, topicId);
+      }
+
+      if (a.courseWorkId) {
+        hacerExport(); // ya vinculada: actualiza directamente, sin preguntar
+      } else {
+        cerrarBG();
+        modalBG('<h3>Exportar a Classroom</h3>' +
+          '<div style="font-size:14px;margin:6px 0 12px">Se creará una <b>tarea nueva</b> en Classroom llamada «<b>' + a.nombre + '</b>» con <b>' + grades.length + '</b> notas (sobre 10), visible para el alumnado. Esta actividad quedará <b>vinculada</b> a esa tarea: las próximas veces que exportes, se actualizará la misma en vez de crear otra.' +
+          '<br><br><span style="color:#6b7280">La API de Classroom no permite escribir notas en tareas creadas a mano; por eso la app crea una tarea propia.</span></div>' +
+          '<label class="f">Instrucciones para el alumnado (opcional, se guardan en la propia tarea de Classroom)</label>' +
+          '<textarea class="t" id="exp-desc" placeholder="Por ejemplo: enlace al libro, qué archivo adjuntar, fecha límite…"></textarea>' +
+          '<label class="f" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="exp-borrador"> Guardar como borrador (no visible para el alumnado todavía)</label>' +
+          '<div class="acts"><button class="mini" onclick="cerrarBG()">Cancelar</button>' +
+          '<button class="primary" onclick="window.__doExport()">Crear y exportar</button></div>');
+        window.__doExport = function () {
+          var desc = (document.getElementById('exp-desc').value || '').trim();
+          var borrador = document.getElementById('exp-borrador').checked;
+          hacerExport(desc + criteriosTexto(a, c), borrador);
+        };
+      }
+    };
+
+    // ---- Crear la tarea de Classroom a la vez que la actividad (desde el propio formulario) ----
+    window.crearTareaEnClassroom = function (actId, titulo, instrucciones, borrador, topicId) {
+      var a = window.Model.actividad(actId), c = window.Model.clase(window.Model.claseIdDe(a));
+      if (!c || !c.courseId) return;
+      var descFinal = (instrucciones || '') + criteriosTexto(a, c);
+      cargando(borrador ? 'Creando la tarea en Classroom (como borrador)…' : 'Creando la tarea en Classroom…');
+      google.script.run.withSuccessHandler(function (res) {
+        window.Model.setActividadCourseWork(actId, res.courseWorkId);
+        cInfo('Creada la tarea «' + (titulo || a.nombre) + '»' + (borrador ? ' (como borrador, sin publicar todavía; publícala cuando quieras y luego exporta notas desde aquí para volcarlas)' : '') + ' en Classroom, ya vinculada a esta actividad.');
+      }).withFailureHandler(errClassroom).exportGrades(c.courseId, null, titulo || a.nombre, [], descFinal, !!borrador, topicId || null);
+    };
+
+    // ---- Vincular / desvincular un proyecto a un tema de Classroom ----
+    App.vincularTemaClassroom = function (proyId) {
+      var p = window.Model.proyecto(proyId), c = window.Model.clase(p.claseId);
+      if (!c || !c.courseId) return cInfo('Esta clase no viene de Classroom.');
+      cargando('Cargando los temas del curso…');
+      google.script.run.withSuccessHandler(function (temas) {
+        cerrarBG();
+        var lista = (temas || []).map(function (t) {
+          return botonLista('window.__pickTopic(\'' + t.id + '\',\'' + t.name.replace(/'/g, '') + '\')', t.name);
+        }).join('');
+        modalBG('<h3>Vincular a un tema</h3>' +
+          (lista || '<div style="color:#6b7280;font-size:13px;margin-bottom:8px">Este curso todavía no tiene temas.</div>') +
+          '<label class="f">O crea uno nuevo</label>' +
+          '<input class="t" id="topic-nuevo" value="' + p.nombre.replace(/"/g, '&quot;') + '">' +
+          '<div class="acts"><button class="mini" onclick="cerrarBG()">Cancelar</button>' +
+          '<button class="primary" onclick="window.__crearTopic()">Crear y vincular</button></div>');
+        window.__pickTopic = function (topicId, name) {
+          cerrarBG();
+          window.Model.setProyectoTopic(proyId, topicId, name);
+          App.openProyecto(proyId);
+        };
+        window.__crearTopic = function () {
+          var nombre = (document.getElementById('topic-nuevo').value || '').trim();
+          if (!nombre) return alert('Pon un nombre para el tema.');
+          cargando('Creando el tema…');
+          google.script.run.withSuccessHandler(function (t) {
+            cerrarBG();
+            window.Model.setProyectoTopic(proyId, t.id, t.name);
+            App.openProyecto(proyId);
+          }).withFailureHandler(errClassroom).crearTopic(c.courseId, nombre);
+        };
+      }).withFailureHandler(errClassroom).listTopics(c.courseId);
+    };
+    App.desvincularTemaClassroom = function (proyId) {
+      if (!confirm('¿Desvincular este proyecto de su tema de Classroom? Las próximas tareas que crees no caerán agrupadas.')) return;
+      window.Model.setProyectoTopic(proyId, null, null);
+      App.openProyecto(proyId);
+    };
+
+    // ---- Desvincular una actividad de su tarea de Classroom ----
+    App.desvincularClassroom = function (actId) {
+      if (!confirm('¿Desvincular esta actividad de su tarea de Classroom? La próxima vez podrás elegir otra, o se creará una nueva.')) return;
+      window.Model.setActividadCourseWork(actId, null);
+      App.openActividad(actId);
+    };
+
+    // ---- Vincular a una tarea de Classroom ya existente, sin tocar notas ----
+    App.vincularTareaExistente = function (actId) {
+      var a = window.Model.actividad(actId), c = window.Model.clase(window.Model.claseIdDe(a));
+      if (!c || !c.courseId) return cInfo('Esta clase no viene de Classroom.');
+      elegirTarea(c.courseId, 'Vincular a…', function (cwId) {
+        window.Model.setActividadCourseWork(actId, cwId);
+        App.openActividad(actId);
+        cInfo('Actividad vinculada. A partir de ahora, "Importar" y "Exportar" usarán siempre esa tarea.');
+      });
+    };
+
+    // ---- Sincronizar alumnado con Classroom: añade quien es nuevo, avisa de quien ya no está ----
+    function eliminarAlumnoTrasClassroom(grupoId, alumnoId, claseId) {
+      var al = (window.Model.alumnosDe(claseId) || []).filter(function (a) { return a.id === alumnoId; })[0];
+      var nombre = al ? al.nombre : 'este alumno/a';
+      if (!confirm('¿Eliminar a ' + nombre + ' y sus notas de esta clase? Esta acción no se puede deshacer.')) return;
+      window.Model.eliminarAlumnoDeGrupo(grupoId, alumnoId);
+      cerrarBG();
+      App.openClase(claseId);
+    }
+    App.actualizarAlumnadoClassroom = function (claseId) {
+      var c = window.Model.clase(claseId);
+      if (!c || !c.courseId) return cInfo('Esta clase no viene de Classroom, no se puede actualizar así.');
+
+      cargando('Comprobando alumnado en Classroom…');
+      google.script.run.withSuccessHandler(function (roster) {
+        var actuales = window.Model.alumnosDe(claseId);
+        var idsActuales = {}; actuales.forEach(function (a) { if (a.classroomId) idsActuales[a.classroomId] = a; });
+        var idsRoster = {}; (roster || []).forEach(function (r) { idsRoster[r.classroomId] = r; });
+
+        var nuevos = (roster || []).filter(function (r) { return !idsActuales[r.classroomId]; });
+        var yaNoEstan = actuales.filter(function (a) { return a.classroomId && !idsRoster[a.classroomId]; });
+
+        if (nuevos.length) window.Model.agregarAlumnosAGrupo(c.grupoId, nuevos);
+
+        var msg = nuevos.length
+          ? ('✅ Añadidos automáticamente: ' + nuevos.map(function (n) { return n.nombre; }).join(', '))
+          : 'No hay alumnado nuevo que añadir.';
+        msg += '<br><br>';
+        if (yaNoEstan.length) {
+          msg += '<b>Ya no aparecen matriculados en Classroom</b> (no se han borrado, decides tú):';
+          msg += yaNoEstan.map(function (a) {
+            return '<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0">' + window.UI.esc(a.nombre) +
+              ' <button class="mini" onclick="eliminarAlumnoTrasClassroom(\'' + c.grupoId + '\',\'' + a.id + '\',\'' + claseId + '\')">🗑 Eliminar</button></div>';
+          }).join('');
+        } else {
+          msg += 'Nadie ha dejado de aparecer matriculado.';
+        }
+
+        App.openClase(claseId);
+        cInfo(msg);
+      }).withFailureHandler(errClassroom).importRoster(c.courseId);
+    };
+  </script>
+</body>
+</html>

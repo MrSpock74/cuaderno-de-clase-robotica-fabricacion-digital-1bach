@@ -1,0 +1,396 @@
+<script>
+/*
+ * model.js — Almacenamiento (localStorage) y operaciones CRUD.
+ * No calcula notas (eso es engine.js) ni pinta (eso es ui.js). Solo gestiona el estado.
+ *
+ * Estado:
+ *   grupos:      [{ id, nombre, curso, alumnos:[{id,nombre}] }]
+ *   clases:      [{ id, grupoId, area, color }]              area = 'RyFD I' (única materia en esta copia)
+ *   proyectos:   [{ id, claseId, nombre }]
+ *   rubricas:    [{ id, nombre, niveles:{ ne,in,su,bi,no,so } }]       banco de rúbricas reutilizables
+ *   actividades: [{ id, proyectoId, nombre, tipo, informativa, criterios:[cod], rubricaId, items }]
+ *                tipo = 'niveles' | 'directa' | 'items' | 'check' | 'observacion'
+ *   evals:       { [actId]: { [alumnoId]: { [cod]: value } } }        value = número 0–10 (o texto si informativa)
+ *   feedback:    { [actId]: { [alumnoId]: texto } }                   un comentario por actividad y alumno/a
+ */
+(function (root) {
+  'use strict';
+
+  var KEY = 'cuadernoRyFD_v1';
+  // Almacén intercambiable: por defecto localStorage (versión local);
+  // en Apps Script se inyecta window.__RYFD_STORE respaldado por Drive.
+  var STORE = (typeof window !== 'undefined' && window.__RYFD_STORE) ? window.__RYFD_STORE
+    : (typeof localStorage !== 'undefined' ? localStorage
+    : { getItem: function () { return null; }, setItem: function () {} });
+  var state = normalize(load());
+
+  function load() {
+    try {
+      var raw = STORE.getItem(KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return { grupos: [], clases: [], proyectos: [], actividades: [], rubricas: [], evals: {} };
+  }
+  /** Garantiza que existan todas las colecciones (compatibilidad con datos antiguos). */
+  function normalize(s) {
+    ['grupos', 'clases', 'proyectos', 'actividades', 'rubricas'].forEach(function (k) { if (!s[k]) s[k] = []; });
+    if (!s.evals) s.evals = {};
+    if (!s.feedback) s.feedback = {};      // { [actId]: { [alumnoId]: texto } }
+    if (!s.historial) s.historial = [];    // [{ ts, actId, alumnoId, cod, value }] — registro cronológico de notas
+    if (!s.asistencia) s.asistencia = {}; // { [claseId]: { [fecha]: { [alumnoId]: 'F' | 'J' } } }
+    if (!s.agenda) s.agenda = [];         // entradas del planificador
+    return s;
+  }
+  function save() { STORE.setItem(KEY, JSON.stringify(state)); }
+  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+  // ---- lecturas ----
+  function grupo(id)   { return state.grupos.find(function (g) { return g.id === id; }); }
+  function clase(id)   { return state.clases.find(function (c) { return c.id === id; }); }
+  function proyecto(id){ return state.proyectos.find(function (p) { return p.id === id; }); }
+  function actividad(id){return state.actividades.find(function (a) { return a.id === id; }); }
+  function proyectosDe(claseId) { return state.proyectos.filter(function (p) { return p.claseId === claseId; }); }
+  function actividadesDe(proyId) { return state.actividades.filter(function (a) { return a.proyectoId === proyId; }); }
+  /** Clase a la que pertenece una actividad (por su claseId, o vía su proyecto para datos antiguos). */
+  function claseIdDe(a) { return a.claseId || (proyecto(a.proyectoId) || {}).claseId || null; }
+  /** Actividades sueltas de una clase (sin proyecto). */
+  function actividadesSueltasDe(claseId) { return state.actividades.filter(function (a) { return claseIdDe(a) === claseId && !a.proyectoId; }); }
+  function alumnosDe(claseId) { var c = clase(claseId), g = c && grupo(c.grupoId); return g ? g.alumnos : []; }
+
+  function rubrica(id) { return state.rubricas.find(function (r) { return r.id === id; }); }
+
+  /** Todas las evaluaciones NUMÉRICAS de un alumno en una clase → [{cod, value}] (para el motor).
+   *  Incluye actividades sueltas y de proyectos; excluye las informativas (no cuentan). */
+  function evalsAlumnoClase(claseId, alumnoId) {
+    var out = [];
+    state.actividades.forEach(function (a) {
+      if (claseIdDe(a) !== claseId || a.informativa) return;
+      var byAl = state.evals[a.id] && state.evals[a.id][alumnoId];
+      if (byAl) Object.keys(byAl).forEach(function (cod) {
+        if (typeof byAl[cod] === 'number') out.push({ cod: cod, value: byAl[cod] });
+      });
+    });
+    return out;
+  }
+
+  function getEval(actId, alumnoId, cod) {
+    var v = state.evals[actId] && state.evals[actId][alumnoId] && state.evals[actId][alumnoId][cod];
+    return (v === undefined) ? null : v;
+  }
+
+  /** Feedback textual de un alumno/a en una actividad concreta (null si no hay). */
+  function getFeedback(actId, alumnoId) {
+    var v = state.feedback[actId] && state.feedback[actId][alumnoId];
+    return (v === undefined || v === null || v === '') ? null : v;
+  }
+
+  // ---- escrituras ----
+  function setEval(actId, alumnoId, cod, value) {
+    if (!state.evals[actId]) state.evals[actId] = {};
+    if (!state.evals[actId][alumnoId]) state.evals[actId][alumnoId] = {};
+    if (value === null || value === undefined) {
+      delete state.evals[actId][alumnoId][cod];
+    } else {
+      state.evals[actId][alumnoId][cod] = value;
+      state.historial.push({ ts: Date.now(), actId: actId, alumnoId: alumnoId, cod: cod, value: value });
+    }
+    save();
+  }
+
+  /** Historial cronológico (más antiguo primero) de un criterio para un alumno/a. */
+  function historialAlumnoCriterio(alumnoId, cod) {
+    return state.historial
+      .filter(function (h) { return h.alumnoId === alumnoId && h.cod === cod; })
+      .sort(function (a, b) { return a.ts - b.ts; });
+  }
+
+  /** Guarda (o borra, si texto es null/vacío) el feedback de un alumno/a en una actividad. */
+  function setFeedback(actId, alumnoId, texto) {
+    if (texto === null || texto === undefined || texto === '') {
+      if (state.feedback[actId]) delete state.feedback[actId][alumnoId];
+    } else {
+      if (!state.feedback[actId]) state.feedback[actId] = {};
+      state.feedback[actId][alumnoId] = texto;
+    }
+    save();
+  }
+
+  function addGrupo(nombre, curso, nombresAlumnos) {
+    state.grupos.push({ id: uid(), nombre: nombre, curso: curso,
+      alumnos: nombresAlumnos.map(function (n) { return { id: uid(), nombre: n }; }) });
+    save();
+  }
+  function updateGrupo(id, nombre, curso, nombresAlumnos) {
+    var g = grupo(id); if (!g) return;
+    var prev = g.alumnos;
+    g.nombre = nombre; g.curso = curso;
+    // conserva las notas de quien no cambia de nombre
+    g.alumnos = nombresAlumnos.map(function (n) {
+      return prev.find(function (a) { return a.nombre === n; }) || { id: uid(), nombre: n };
+    });
+    save();
+  }
+  function removeGrupo(id) {
+    if (state.clases.some(function (c) { return c.grupoId === id; })) return false;
+    state.grupos = state.grupos.filter(function (g) { return g.id !== id; });
+    save(); return true;
+  }
+
+  function addClase(grupoId, area, color) {
+    state.clases.push({ id: uid(), grupoId: grupoId, area: area, color: color });
+    save();
+  }
+  /** Crea el alumnado y la clase en un solo paso (importación de Classroom o lista pegada).
+   *  `alumnos` puede ser strings (nombres) u objetos {nombre, classroomId}. `courseId` opcional. */
+  function addClaseConAlumnado(nombre, area, color, alumnos, courseId) {
+    var g = { id: uid(), nombre: nombre, curso: '', alumnos: (alumnos || []).map(function (a) {
+      return (typeof a === 'string') ? { id: uid(), nombre: a }
+                                     : { id: uid(), nombre: a.nombre, classroomId: a.classroomId || null };
+    }) };
+    state.grupos.push(g);
+    var c = { id: uid(), grupoId: g.id, area: area, color: color, courseId: courseId || null };
+    state.clases.push(c);
+    save();
+    return c.id;
+  }
+  /** Nota de una actividad para un alumno: media de sus criterios evaluados (para exportar a Classroom). */
+  function notaActividad(actId, alumnoId) {
+    var a = actividad(actId); if (!a) return null;
+    var vals = [];
+    (a.criterios || []).forEach(function (c) { var v = getEval(actId, alumnoId, c); if (typeof v === 'number') vals.push(v); });
+    return vals.length ? vals.reduce(function (s, x) { return s + x; }, 0) / vals.length : null;
+  }
+
+  /** Añade alumnos nuevos (ya con su classroomId) a un grupo existente, sin tocar a los que ya había. */
+  function agregarAlumnosAGrupo(grupoId, nuevos) {
+    var g = grupo(grupoId); if (!g) return [];
+    var creados = (nuevos || []).map(function (n) {
+      var al = { id: uid(), nombre: n.nombre, classroomId: n.classroomId || null };
+      g.alumnos.push(al);
+      return al;
+    });
+    save();
+    return creados;
+  }
+
+  /** Elimina a un alumno/a de un grupo y purga sus notas, feedback, asistencia e historial en las clases de ese grupo. */
+  function eliminarAlumnoDeGrupo(grupoId, alumnoId) {
+    var g = grupo(grupoId); if (!g) return;
+    g.alumnos = g.alumnos.filter(function (a) { return a.id !== alumnoId; });
+
+    var clasesDelGrupo = state.clases.filter(function (c) { return c.grupoId === grupoId; }).map(function (c) { return c.id; });
+    state.actividades.filter(function (a) { return clasesDelGrupo.indexOf(claseIdDe(a)) !== -1; }).forEach(function (a) {
+      if (state.evals[a.id]) delete state.evals[a.id][alumnoId];
+      if (state.feedback[a.id]) delete state.feedback[a.id][alumnoId];
+    });
+    state.historial = state.historial.filter(function (h) { return h.alumnoId !== alumnoId; });
+    clasesDelGrupo.forEach(function (cid) {
+      var dias = state.asistencia[cid];
+      if (dias) Object.keys(dias).forEach(function (f) { delete dias[f][alumnoId]; });
+    });
+    save();
+  }
+
+  function removeClase(id) {
+    var c0 = clase(id);
+    // todas las actividades de la clase (sueltas y de proyectos) + sus notas, feedback e historial
+    var idsAct = state.actividades.filter(function (a) { return claseIdDe(a) === id; }).map(function (a) { return a.id; });
+    idsAct.forEach(function (aid) {
+      delete state.evals[aid];
+      delete state.feedback[aid];
+    });
+    state.historial = state.historial.filter(function (h) { return idsAct.indexOf(h.actId) === -1; });
+    state.actividades = state.actividades.filter(function (a) { return claseIdDe(a) !== id; });
+    state.proyectos = state.proyectos.filter(function (p) { return p.claseId !== id; });
+    if (state.asistencia[id]) delete state.asistencia[id];
+    state.clases = state.clases.filter(function (c) { return c.id !== id; });
+    // borra el grupo asociado si ninguna otra clase lo usa (grupo 1:1 con la clase)
+    if (c0 && !state.clases.some(function (c) { return c.grupoId === c0.grupoId; }))
+      state.grupos = state.grupos.filter(function (g) { return g.id !== c0.grupoId; });
+    save();
+  }
+
+  function addProyecto(claseId, nombre) { state.proyectos.push({ id: uid(), claseId: claseId, nombre: nombre, topicId: null, topicName: null }); save(); }
+  /** Vincula (o desvincula, con null) un proyecto a un tema de Classroom. */
+  function setProyectoTopic(proyId, topicId, topicName) {
+    var p = proyecto(proyId); if (!p) return;
+    p.topicId = topicId || null;
+    p.topicName = topicId ? (topicName || null) : null;
+    save();
+  }
+  function removeProyecto(id) {
+    var idsAct = actividadesDe(id).map(function (a) { return a.id; });
+    idsAct.forEach(function (aid) {
+      delete state.evals[aid];
+      delete state.feedback[aid];
+    });
+    state.historial = state.historial.filter(function (h) { return idsAct.indexOf(h.actId) === -1; });
+    state.actividades = state.actividades.filter(function (a) { return a.proyectoId !== id; });
+    state.proyectos = state.proyectos.filter(function (p) { return p.id !== id; });
+    save();
+  }
+
+  function addActividad(claseId, proyectoId, data) {
+    var nueva = {
+      id: uid(), claseId: claseId, proyectoId: proyectoId || null,
+      nombre: data.nombre, tipo: data.tipo, informativa: !!data.informativa,
+      criterios: data.criterios || [], rubricaId: data.rubricaId || null
+    };
+    state.actividades.push(nueva);
+    save();
+    return nueva.id;
+  }
+
+  // ---- banco de rúbricas ----
+  function addRubrica(nombre, niveles) { var id = uid(); state.rubricas.push({ id: id, nombre: nombre, niveles: niveles }); save(); return id; }
+  function updateRubrica(id, nombre, niveles) { var r = rubrica(id); if (!r) return; r.nombre = nombre; r.niveles = niveles; save(); }
+  function removeRubrica(id) {
+    state.actividades.forEach(function (a) { if (a.rubricaId === id) a.rubricaId = null; });
+    state.rubricas = state.rubricas.filter(function (r) { return r.id !== id; });
+    save();
+  }
+  function removeActividad(id) {
+    delete state.evals[id];
+    delete state.feedback[id];
+    state.historial = state.historial.filter(function (h) { return h.actId !== id; });
+    state.actividades = state.actividades.filter(function (a) { return a.id !== id; });
+    save();
+  }
+
+  function delete_evalsOfProyecto(pid) {
+    actividadesDe(pid).forEach(function (a) { delete state.evals[a.id]; delete state.feedback[a.id]; });
+  }
+
+  // ---- asistencia (registro aparte; no afecta a la nota) ----
+  function getAsistencia(claseId, fecha, alumnoId) {
+    var d = state.asistencia[claseId] && state.asistencia[claseId][fecha];
+    return (d && d[alumnoId]) || null; // null = presente
+  }
+  function setAsistencia(claseId, fecha, alumnoId, estado) {
+    if (!state.asistencia[claseId]) state.asistencia[claseId] = {};
+    if (!state.asistencia[claseId][fecha]) state.asistencia[claseId][fecha] = {};
+    if (!estado) delete state.asistencia[claseId][fecha][alumnoId];
+    else state.asistencia[claseId][fecha][alumnoId] = estado;
+    save();
+  }
+  /** Recuento de faltas de un alumno en una clase → { F, J, total }. */
+  function faltas(claseId, alumnoId) {
+    var r = { F: 0, J: 0, total: 0 }, dias = state.asistencia[claseId] || {};
+    Object.keys(dias).forEach(function (f) {
+      var e = dias[f][alumnoId];
+      if (e === 'F') { r.F++; r.total++; } else if (e === 'J') { r.J++; r.total++; }
+    });
+    return r;
+  }
+
+  // ---- agenda / planificador ----
+  // entrada: { id, fecha, tipo:'sesion'|'reunion'|'tarea', claseId, titulo, plan, diario, done }
+  function entrada(id) { return state.agenda.find(function (e) { return e.id === id; }); }
+  function entradasEntre(desde, hasta) {
+    return state.agenda.filter(function (e) { return e.fecha >= desde && e.fecha <= hasta; })
+      .sort(function (a, b) { return a.fecha < b.fecha ? -1 : (a.fecha > b.fecha ? 1 : 0); });
+  }
+  function addEntrada(data) {
+    var e = { id: uid(), fecha: data.fecha, tipo: data.tipo, claseId: data.claseId || null,
+      titulo: data.titulo || '', plan: data.plan || '', diario: data.diario || '', done: !!data.done };
+    state.agenda.push(e); save(); return e.id;
+  }
+  function updateEntrada(id, data) {
+    var e = entrada(id); if (!e) return;
+    ['fecha', 'tipo', 'claseId', 'titulo', 'plan', 'diario', 'done'].forEach(function (k) {
+      if (data[k] !== undefined) e[k] = data[k];
+    });
+    save();
+  }
+  function removeEntrada(id) { state.agenda = state.agenda.filter(function (e) { return e.id !== id; }); save(); }
+
+  // ---- copia de seguridad ----
+  function exportJSON() { return JSON.stringify(state, null, 2); }
+  function importJSON(text) {
+    var d = JSON.parse(text);
+    if (!d.grupos) throw new Error('Formato no válido');
+    state = normalize(d); save();
+  }
+
+  /** Vincula (o desvincula, con null) una actividad a una tarea de Classroom concreta,
+   *  para que Importar/Exportar reutilicen siempre la misma sin volver a preguntar. */
+  function setActividadCourseWork(actId, courseWorkId) {
+    var a = actividad(actId); if (!a) return;
+    a.courseWorkId = courseWorkId || null;
+    save();
+  }
+
+  /** Cambia los criterios de una actividad ya creada. Las notas de criterios que se quitan se borran. */
+  function setActividadCriterios(actId, criterios) {
+    var a = actividad(actId); if (!a) return;
+    var nuevos = (criterios || []).slice();
+    var ev = state.evals[actId] || {};
+    Object.keys(ev).forEach(function (alId) {
+      Object.keys(ev[alId]).forEach(function (cod) { if (nuevos.indexOf(cod) === -1) delete ev[alId][cod]; });
+    });
+    a.criterios = nuevos;
+    save();
+  }
+
+  /** Recuerda la hoja (id) de la que se importa el desglose por criterios de esta actividad. */
+  function setActividadFuenteDesglose(actId, sheetId) {
+    var a = actividad(actId); if (!a) return;
+    a.fuenteDesglose = sheetId || null;
+    save();
+  }
+
+  /**
+   * Vuelca en la actividad el desglose por criterios que calcula la app de Python.
+   * items = [{classroomId, definitiva, puntos:{cod:n}, max:{cod:n}}]
+   * Cada criterio se guarda como nota 0-10 = puntos / maximo * 10.
+   * Por defecto solo importa las definitivas (reflexion de IA ya valorada).
+   * Devuelve { importados, provisionales, sinDatos, sinCriterio } para informar al usuario.
+   */
+  function importarDesglose(actId, items, incluirProvisionales) {
+    var a = actividad(actId), res = { importados: 0, provisionales: 0, sinDatos: 0, sinCriterio: [] };
+    if (!a) return res;
+    var porId = {};
+    (items || []).forEach(function (it) { porId[it.classroomId] = it; });
+    var usados = {};
+    alumnosDe(claseIdDe(a)).forEach(function (al) {
+      var it = al.classroomId ? porId[al.classroomId] : null;
+      if (!it || !it.puntos) { res.sinDatos++; return; }
+      if (!it.definitiva && !incluirProvisionales) { res.provisionales++; return; }
+      (a.criterios || []).forEach(function (cod) {
+        var p = it.puntos[cod], m = it.max && it.max[cod];
+        if (typeof p !== 'number' || !m) return;
+        usados[cod] = true;
+        var v = Math.round(Math.max(0, Math.min(1, p / m)) * 1000) / 100; // 0-10 con 2 decimales
+        setEval(actId, al.id, cod, v);
+      });
+      res.importados++;
+    });
+    var disponibles = {};
+    (items || []).forEach(function (it) { Object.keys(it.puntos || {}).forEach(function (c) { disponibles[c] = true; }); });
+    Object.keys(disponibles).forEach(function (c) { if ((a.criterios || []).indexOf(c) === -1) res.sinCriterio.push(c); });
+    return res;
+  }
+
+  var Model = {
+    getState: function () { return state; },
+    grupo: grupo, clase: clase, proyecto: proyecto, actividad: actividad, rubrica: rubrica,
+    proyectosDe: proyectosDe, actividadesDe: actividadesDe, actividadesSueltasDe: actividadesSueltasDe, claseIdDe: claseIdDe, alumnosDe: alumnosDe,
+    evalsAlumnoClase: evalsAlumnoClase, getEval: getEval, setEval: setEval, notaActividad: notaActividad,
+    getFeedback: getFeedback, setFeedback: setFeedback, setActividadCourseWork: setActividadCourseWork,
+    setActividadCriterios: setActividadCriterios, setActividadFuenteDesglose: setActividadFuenteDesglose, importarDesglose: importarDesglose,
+    historialAlumnoCriterio: historialAlumnoCriterio,
+    getAsistencia: getAsistencia, setAsistencia: setAsistencia, faltas: faltas,
+    entrada: entrada, entradasEntre: entradasEntre, addEntrada: addEntrada, updateEntrada: updateEntrada, removeEntrada: removeEntrada,
+    addGrupo: addGrupo, updateGrupo: updateGrupo, removeGrupo: removeGrupo,
+    addClase: addClase, addClaseConAlumnado: addClaseConAlumnado, removeClase: removeClase,
+    agregarAlumnosAGrupo: agregarAlumnosAGrupo, eliminarAlumnoDeGrupo: eliminarAlumnoDeGrupo,
+    addProyecto: addProyecto, removeProyecto: removeProyecto, setProyectoTopic: setProyectoTopic,
+    addActividad: addActividad, removeActividad: removeActividad,
+    addRubrica: addRubrica, updateRubrica: updateRubrica, removeRubrica: removeRubrica,
+    exportJSON: exportJSON, importJSON: importJSON
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = Model;
+  else root.Model = Model;
+})(typeof window !== 'undefined' ? window : this);
+</script>

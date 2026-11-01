@@ -1,0 +1,110 @@
+<script>
+/*
+ * engine.js — Motor de cálculo de la calificación competencial (RyFD).
+ * Funciones PURAS: reciben datos y devuelven notas. No acceden al DOM ni a localStorage.
+ *
+ * Modelo de nota (ver programación):
+ *   - Cada evaluación de un criterio es un número 0–10 (según rúbrica de 5 niveles + "no entregado").
+ *   - Nota de criterio  = media de sus evaluaciones.
+ *   - Nota de CE        = 90 % media de sus criterios de contenido + 10 % criterio transversal.
+ *   - Nota final        = media de las 4 CE (peso igual).
+ */
+(function (root) {
+  'use strict';
+
+  // Niveles de logro con su banda [min, max] y valor por defecto (centro operativo de la banda).
+  var RUBRIC_LEVELS = [
+    { key: 'ne', label: 'No entregado / muy deficiente', min: 0,   max: 2.4, def: 0   },
+    { key: 'in', label: 'Insuficiente',                  min: 2.5, max: 4.9, def: 3.7 },
+    { key: 'su', label: 'Suficiente',                    min: 5,   max: 5.9, def: 5.5 },
+    { key: 'bi', label: 'Bien',                          min: 6,   max: 6.9, def: 6.5 },
+    { key: 'no', label: 'Notable',                       min: 7,   max: 8.9, def: 8   },
+    { key: 'so', label: 'Sobresaliente',                 min: 9,   max: 10,  def: 9.5 }
+  ];
+
+  var TRANSVERSAL_WEIGHT = 0.10; // peso del criterio transversal dentro de cada CE
+
+  /** Nivel de logro correspondiente a un valor numérico (para colorear/etiquetar). */
+  function levelOf(value) {
+    if (value == null) return null;
+    for (var i = 0; i < RUBRIC_LEVELS.length; i++) {
+      if (value <= RUBRIC_LEVELS[i].max + 1e-9) return RUBRIC_LEVELS[i];
+    }
+    return RUBRIC_LEVELS[RUBRIC_LEVELS.length - 1];
+  }
+
+  /** Media aritmética de una lista de números; null si está vacía. */
+  function mean(nums) {
+    if (!nums || !nums.length) return null;
+    var s = 0;
+    for (var i = 0; i < nums.length; i++) s += nums[i];
+    return s / nums.length;
+  }
+
+  /**
+   * Nota de un criterio para un alumno.
+   * @param {Array<{cod:string,value:number}>} evs  evaluaciones del alumno.
+   * @param {string} cod  código del criterio (p. ej. "1.1" o "T").
+   * @returns {number|null}
+   */
+  function criterioMean(evs, cod) {
+    var vals = [];
+    for (var i = 0; i < evs.length; i++) if (evs[i].cod === cod) vals.push(evs[i].value);
+    return mean(vals);
+  }
+
+  /**
+   * Nota de una competencia específica: 90 % contenido + 10 % transversal.
+   * La CE solo tiene nota si hay CONTENIDO evaluado; el transversal es un modificador,
+   * nunca puntúa una CE por sí solo. Si no hay transversal aún, la CE = media de contenido.
+   */
+  function ceScore(evs, criterios, transCod, weight) {
+    var content = mean(
+      criterios.map(function (c) { return criterioMean(evs, c); })
+               .filter(function (x) { return x !== null; })
+    );
+    if (content === null) return null;
+    var trans = transCod ? criterioMean(evs, transCod) : null;
+    if (trans === null) return content;
+    return (1 - weight) * content + weight * trans;
+  }
+
+  /**
+   * Calcula todas las notas de un alumno.
+   * @param {{ces:Array<{ce:number,criterios:string[]}>, transCod:string}} def  definición de la clase.
+   * @param {Array<{cod:string,value:number}>} evs  evaluaciones del alumno.
+   * @returns {{perCriterio:Object, perCE:Array, final:number|null}}
+   */
+  function computeAlumno(def, evs) {
+    var perCriterio = {};
+    def.ces.forEach(function (g) {
+      g.criterios.forEach(function (c) { perCriterio[c] = criterioMean(evs, c); });
+    });
+    if (def.transCod) perCriterio[def.transCod] = criterioMean(evs, def.transCod);
+
+    var perCE = def.ces.map(function (g) {
+      return { ce: g.ce, nota: ceScore(evs, g.criterios, def.transCod, TRANSVERSAL_WEIGHT) };
+    });
+    var final = mean(perCE.map(function (x) { return x.nota; })
+                          .filter(function (x) { return x !== null; }));
+    return { perCriterio: perCriterio, perCE: perCE, final: final };
+  }
+
+  /** Formatea una nota a 2 decimales con coma; "—" si es null. */
+  function fmt(n) { return n == null ? '—' : n.toFixed(2).replace('.', ','); }
+
+  var Engine = {
+    RUBRIC_LEVELS: RUBRIC_LEVELS,
+    TRANSVERSAL_WEIGHT: TRANSVERSAL_WEIGHT,
+    levelOf: levelOf,
+    mean: mean,
+    criterioMean: criterioMean,
+    ceScore: ceScore,
+    computeAlumno: computeAlumno,
+    fmt: fmt
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = Engine;
+  else root.Engine = Engine;
+})(typeof window !== 'undefined' ? window : this);
+</script>

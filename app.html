@@ -1,0 +1,608 @@
+<script>
+/*
+ * app.js — Orquestador: estado de navegación, render, modales y manejadores de eventos.
+ * Es el único que muta el estado (a través de Model) y vuelve a pintar.
+ */
+(function (root) {
+  'use strict';
+  var Model = root.Model, Seed = root.Seed, Engine = root.Engine, UI = root.UI;
+  var COLORES = ['#1f7a5c', '#2f80ed', '#e05353', '#8e44ad', '#e67e22', '#16a085'];
+
+  var view = { name: 'clases', claseId: null, proyectoId: null, actividadId: null, fecha: null, semana: null, agendaMode: 'semana' };
+  var actCtx = null; // contexto al crear actividad: { claseId, proyectoId|null }
+
+  function render() {
+    var el = document.getElementById('app'), html = '';
+    switch (view.name) {
+      case 'grupos':    html = UI.grupos(); break;
+      case 'clases':    html = UI.clases(); break;
+      case 'rubricas':  html = UI.rubricas(); break;
+      case 'clase':     html = UI.clase(view.claseId); break;
+      case 'proyecto':  html = UI.proyecto(view.proyectoId); break;
+      case 'actividad': html = UI.actividad(view.actividadId); break;
+      case 'resumen':   html = UI.resumen(view.claseId); break;
+      case 'asistencia': html = UI.asistencia(view.claseId, view.fecha); break;
+      case 'agenda':    html = UI.agenda(view.semana, view.agendaMode); break;
+      case 'comparativa': html = UI.comparativa(); break;
+    }
+    el.innerHTML = html;
+    var enClases = ['clase', 'proyecto', 'actividad', 'resumen', 'asistencia'];
+    document.querySelectorAll('#tabs button').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.v === view.name || (enClases.indexOf(view.name) >= 0 && b.dataset.v === 'clases'));
+    });
+  }
+
+  // ---------- navegación ----------
+  function go(name) { view.name = name; render(); }
+  function openClase(id) { view.name = 'clase'; view.claseId = id; render(); }
+  function openProyecto(id) { view.name = 'proyecto'; view.proyectoId = id; view.claseId = Model.proyecto(id).claseId; render(); }
+  function openActividad(id) { view.name = 'actividad'; view.actividadId = id; render(); }
+  function verResumen(id) { view.name = 'resumen'; view.claseId = id; render(); }
+
+  // ---------- modales ----------
+  function modal(html) {
+    var bg = document.createElement('div');
+    bg.className = 'modal-bg';
+    bg.innerHTML = '<div class="modal">' + html + '</div>';
+    bg.onclick = function (e) { if (e.target === bg) bg.remove(); };
+    document.body.appendChild(bg);
+    return bg;
+  }
+  function closeModal(elem) { var m = elem.closest('.modal-bg'); if (m) m.remove(); }
+
+  function modalGrupo(id) {
+    var g = id ? Model.grupo(id) : null;
+    modal('<h3>' + (g ? 'Editar grupo' : 'Nuevo grupo') + '</h3>' +
+      '<label class="f">Nombre</label><input class="t" id="g-nom" value="' + (g ? UI.esc(g.nombre) : '') + '" placeholder="1.º Bach A">' +
+      '<label class="f">Curso</label><input class="t" id="g-cur" value="' + (g ? UI.esc(g.curso || '') : '') + '" placeholder="1.º Bachillerato">' +
+      '<label class="f">Alumnado (una línea por alumno/a)</label>' +
+      '<textarea class="t" id="g-als" placeholder="Apellidos, Nombre">' + (g ? g.alumnos.map(function (a) { return a.nombre; }).join('\n') : '') + '</textarea>' +
+      '<div class="acts"><button class="mini" onclick="App.closeModal(this)">Cancelar</button>' +
+      '<button class="primary" onclick="App.saveGrupo(\'' + (id || '') + '\',this)">Guardar</button></div>');
+  }
+  function saveGrupo(id, btn) {
+    var nom = val('g-nom'); if (!nom) return alert('Pon un nombre.');
+    var cur = val('g-cur'), als = lines('g-als');
+    if (id) Model.updateGrupo(id, nom, cur, als); else Model.addGrupo(nom, cur, als);
+    closeModal(btn); render();
+  }
+  function delGrupo(id) {
+    if (!confirm('¿Borrar el grupo?')) return;
+    if (!Model.removeGrupo(id)) return alert('No puedes borrarlo: hay clases que lo usan.');
+    render();
+  }
+
+  function modalClase() {
+    var opA = Object.keys(Seed.AREAS).map(function (k) { return '<option value="' + k + '">' + UI.esc(Seed.AREAS[k].nombre) + '</option>'; }).join('');
+    var dots = COLORES.map(function (c, i) { return '<span style="background:' + c + '" class="' + (i === 0 ? 'sel' : '') + '" onclick="App.selColor(this,\'' + c + '\')"></span>'; }).join('');
+    var m = modal('<h3>Nueva clase</h3>' +
+      '<label class="f">Asignatura</label><select class="t" id="c-area">' + opA + '</select>' +
+      '<label class="f">Nombre de la clase</label><input class="t" id="c-nom" placeholder="Ej.: 1.º Bach A">' +
+      '<label class="f">Alumnado (una línea por alumno/a)</label><textarea class="t" id="c-als" placeholder="Apellidos, Nombre"></textarea>' +
+      '<label class="f">Color</label><div class="colordots" id="c-color">' + dots + '</div>' +
+      '<div class="acts"><button class="mini" onclick="App.closeModal(this)">Cancelar</button>' +
+      '<button class="primary" onclick="App.saveClase(this)">Crear clase</button></div>');
+    m.dataset.color = COLORES[0];
+  }
+  function selColor(elem, c) {
+    elem.parentNode.querySelectorAll('span').forEach(function (s) { s.classList.remove('sel'); });
+    elem.classList.add('sel'); elem.closest('.modal-bg').dataset.color = c;
+  }
+  function saveClase(btn) {
+    var area = val('c-area'), nom = val('c-nom') || Seed.AREAS[area].nombre;
+    var cid = Model.addClaseConAlumnado(nom, area, btn.closest('.modal-bg').dataset.color, lines('c-als'));
+    closeModal(btn); openClase(cid);
+  }
+  function delClase(id) { if (confirm('¿Borrar la clase y todo su contenido?')) { Model.removeClase(id); render(); } }
+  function modalEditarAlumnado(claseId) {
+    var c = Model.clase(claseId), g = Model.grupo(c.grupoId);
+    modal('<h3>Editar clase</h3>' +
+      '<label class="f">Nombre de la clase</label><input class="t" id="ea-nom" value="' + UI.esc(g.nombre) + '">' +
+      '<label class="f">Alumnado (una línea por alumno/a). Se conservan las notas de quien no cambie de nombre.</label>' +
+      '<textarea class="t" id="ea-als">' + g.alumnos.map(function (a) { return a.nombre; }).join('\n') + '</textarea>' +
+      '<div class="acts"><button class="mini" onclick="App.closeModal(this)">Cancelar</button>' +
+      '<button class="primary" onclick="App.saveEditarAlumnado(\'' + g.id + '\',this)">Guardar</button></div>');
+  }
+  function saveEditarAlumnado(grupoId, btn) {
+    var g = Model.grupo(grupoId);
+    Model.updateGrupo(grupoId, val('ea-nom') || g.nombre, g.curso, lines('ea-als'));
+    closeModal(btn); render();
+  }
+
+  function modalProyecto() {
+    modal('<h3>Nuevo proyecto</h3>' +
+      '<label class="f">Nombre</label><input class="t" id="p-nom" placeholder="Proyecto 1 · Robot sigue-líneas">' +
+      '<div class="acts"><button class="mini" onclick="App.closeModal(this)">Cancelar</button>' +
+      '<button class="primary" onclick="App.saveProyecto(this)">Crear</button></div>');
+  }
+  function saveProyecto(btn) {
+    var nom = val('p-nom'); if (!nom) return alert('Pon un nombre.');
+    Model.addProyecto(view.claseId, nom); closeModal(btn); render();
+  }
+  function delProyecto(id) { if (confirm('¿Borrar el proyecto y sus actividades?')) { Model.removeProyecto(id); render(); } }
+
+  function modalActividad(proyectoId) {
+    var claseId = proyectoId ? Model.proyecto(proyectoId).claseId : view.claseId;
+    actCtx = { claseId: claseId, proyectoId: proyectoId || null };
+    var proyectoTopic = proyectoId ? Model.proyecto(proyectoId) : null;
+    if (proyectoTopic && !proyectoTopic.topicId) proyectoTopic = null;
+    var c = Model.clase(claseId), area = Seed.AREAS[c.area];
+    var chips = '';
+    area.competencias.forEach(function (comp) {
+      chips += '<div style="margin-top:8px;font-size:12px;color:var(--suave)"><b>CE' + comp.ce + '</b> ' + UI.esc(comp.nombre) + '</div>';
+      comp.criterios.forEach(function (cr) {
+        chips += '<span class="chip off" data-cod="' + cr.cod + '" title="' + UI.esc(cr.doc) + '" onclick="App.toggleChip(this)">' + cr.cod + '</span>';
+      });
+    });
+    if (area.transversal) chips += '<div style="margin-top:8px"><span class="chip off" data-cod="T" title="' + UI.esc(area.transversal.doc) + '" onclick="App.toggleChip(this)">T · Trabajo</span></div>';
+    var rubs = Model.getState().rubricas;
+    var rubOpts = '<option value="">Escala Insuficiente → Sobresaliente (sin descriptores)</option>' +
+      rubs.map(function (r) { return '<option value="' + r.id + '">' + UI.esc(r.nombre) + '</option>'; }).join('');
+    var hintRub = rubs.length ? '' :
+      '<div style="font-size:12px;color:var(--suave);margin-top:6px">Aún no tienes rúbricas con descriptores. Créalas en la pestaña <b>Rúbricas</b>; mientras, se evalúa con la escala de niveles.</div>';
+    var bloqueClassroom = (typeof window !== 'undefined' && window.__CLASSROOM__ && c.courseId)
+      ? '<label class="f" style="display:flex;align-items:center;gap:8px;margin-top:14px">' +
+          '<input type="checkbox" id="a-cw-check" onchange="App.toggleClassroomBox(this.checked)"> Crear también una tarea en Classroom para esto' +
+        '</label>' +
+        '<div id="a-cw-box" style="display:none">' +
+          '<label class="f">Título en Classroom</label><input class="t" id="a-cw-titulo" placeholder="Se usa el nombre de la actividad si lo dejas vacío">' +
+          '<label class="f">Instrucciones para el alumnado</label><textarea class="t" id="a-cw-desc" placeholder="Enlace al material, qué hay que entregar, fecha límite…"></textarea>' +
+          '<label class="f" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="a-cw-borrador"> Guardar como borrador (no visible para el alumnado todavía; la publicas tú cuando quieras, desde la propia Classroom)</label>' +
+          (proyectoTopic ? '<div class="tip">Caerá dentro del tema <b>' + UI.esc(proyectoTopic.topicName || '') + '</b>, porque este proyecto está vinculado a él.</div>' : '') +
+        '</div>'
+      : '';
+    modal('<h3>Nueva actividad</h3>' +
+      '<label class="f">Nombre</label><input class="t" id="a-nom" placeholder="Evidencia / práctica">' +
+      '<label class="f">Evaluación</label>' +
+      '<select class="t" id="a-tipo" onchange="App.onTipoChange(this.value)">' +
+        '<option value="niveles">Rúbrica</option>' +
+        '<option value="directa">Nota directa</option>' +
+      '</select>' +
+      '<div id="a-rubrica-box"><label class="f">Rúbrica a usar</label><select class="t" id="a-rubrica">' + rubOpts + '</select>' + hintRub + '</div>' +
+      '<label class="f" style="display:flex;align-items:center;gap:8px;margin-top:14px"><input type="checkbox" id="a-info"> No cuenta para nota (informativa)</label>' +
+      '<label class="f">Criterios asociados</label><div id="a-crits">' + chips + '</div>' +
+      bloqueClassroom +
+      '<div class="acts"><button class="mini" onclick="App.closeModal(this)">Cancelar</button>' +
+      '<button class="primary" onclick="App.saveActividad(this)">Crear actividad</button></div>');
+  }
+  // ---- editar los criterios de una actividad ya creada ----
+  function modalCriterios(actId) {
+    var a = Model.actividad(actId); if (!a) return;
+    var c = Model.clase(Model.claseIdDe(a)), area = Seed.AREAS[c.area];
+    var sel = a.criterios || [];
+    function chip(cr, texto) {
+      return '<span class="chip' + (sel.indexOf(cr.cod) === -1 ? ' off' : '') + '" data-cod="' + cr.cod + '" title="' + UI.esc(cr.doc) + '" onclick="App.toggleChip(this)">' + texto + '</span>';
+    }
+    var chips = '';
+    area.competencias.forEach(function (comp) {
+      chips += '<div style="margin-top:8px;font-size:12px;color:var(--suave)"><b>CE' + comp.ce + '</b> ' + UI.esc(comp.nombre) + '</div>';
+      comp.criterios.forEach(function (cr) { chips += chip(cr, cr.cod); });
+    });
+    if (area.transversal) chips += '<div style="margin-top:8px">' + chip({ cod: 'T', doc: area.transversal.doc }, 'T · Trabajo') + '</div>';
+    actCtx = { actId: actId };
+    modal('<h3>Criterios de «' + UI.esc(a.nombre) + '»</h3>' +
+      '<div class="tip">Marca los criterios a los que se asocia la actividad. Si quitas alguno, se borran las notas que tuviera en esta actividad; los que añades empiezan vacíos.</div>' +
+      '<div id="a-crits">' + chips + '</div>' +
+      '<div class="acts"><button class="mini" onclick="App.closeModal(this)">Cancelar</button>' +
+      '<button class="primary" onclick="App.saveCriterios(this)">Guardar criterios</button></div>');
+  }
+  function saveCriterios(btn) {
+    var actId = actCtx.actId, a = Model.actividad(actId);
+    var crits = [].map.call(document.querySelectorAll('#a-crits .chip:not(.off)'), function (x) { return x.dataset.cod; });
+    var quitados = (a.criterios || []).filter(function (cod) { return crits.indexOf(cod) === -1; });
+    if (quitados.length && !confirm('Vas a quitar ' + quitados.join(', ') + ' y se borrarán sus notas en esta actividad. ¿Continuar?')) return;
+    Model.setActividadCriterios(actId, crits);
+    closeModal(btn); openActividad(actId);
+  }
+  function toggleClassroomBox(mostrar) {
+    document.getElementById('a-cw-box').style.display = mostrar ? '' : 'none';
+  }
+  function onTipoChange(tipo) {
+    document.getElementById('a-rubrica-box').style.display = (tipo === 'niveles') ? '' : 'none';
+  }
+  function toggleChip(el) { el.classList.toggle('off'); }
+  function saveActividad(btn) {
+    var nom = val('a-nom'); if (!nom) return alert('Pon un nombre.');
+    var tipo = val('a-tipo');
+    var crits = [].map.call(document.querySelectorAll('#a-crits .chip:not(.off)'), function (c) { return c.dataset.cod; });
+    if (!crits.length && !confirm('No has marcado criterios. ¿Crear igualmente?')) return;
+    var nuevoId = Model.addActividad(actCtx.claseId, actCtx.proyectoId, {
+      nombre: nom, tipo: tipo,
+      informativa: document.getElementById('a-info').checked,
+      criterios: crits,
+      rubricaId: tipo === 'niveles' ? (val('a-rubrica') || null) : null
+    });
+    var cwCheck = document.getElementById('a-cw-check');
+    var crearEnClassroom = cwCheck && cwCheck.checked;
+    var cwTitulo = crearEnClassroom ? (val('a-cw-titulo') || nom) : null;
+    var cwDesc = crearEnClassroom ? val('a-cw-desc') : null;
+    var cwBorrador = crearEnClassroom && document.getElementById('a-cw-borrador').checked;
+    var proy = actCtx.proyectoId ? Model.proyecto(actCtx.proyectoId) : null;
+    var cwTopicId = (crearEnClassroom && proy && proy.topicId) ? proy.topicId : null;
+    closeModal(btn); render();
+    if (crearEnClassroom && typeof window.crearTareaEnClassroom === 'function') {
+      window.crearTareaEnClassroom(nuevoId, cwTitulo, cwDesc, cwBorrador, cwTopicId);
+    }
+  }
+  function delActividad(id) { if (confirm('¿Borrar la actividad y sus notas?')) { Model.removeActividad(id); render(); } }
+
+  // ---------- feedback textual (por actividad y alumno/a) ----------
+  function modalFeedback(actId, alumnoId) {
+    var a = Model.actividad(actId), claseId = Model.claseIdDe(a);
+    var al = Model.alumnosDe(claseId).filter(function (x) { return x.id === alumnoId; })[0];
+    var texto = Model.getFeedback(actId, alumnoId) || '';
+    modal('<h3>Feedback — ' + UI.esc(al ? al.nombre : '') + '</h3>' +
+      '<div style="font-size:12px;color:var(--suave);margin-bottom:6px">' + UI.esc(a.nombre) + '</div>' +
+      '<label class="f">Comentario para este alumno/a en esta actividad</label>' +
+      '<textarea class="t" id="fb-texto" style="min-height:130px" placeholder="Escribe aquí tu retroalimentación…">' + UI.esc(texto) + '</textarea>' +
+      '<div class="acts"><button class="mini" onclick="App.closeModal(this)">Cancelar</button>' +
+      '<button class="primary" onclick="App.saveFeedback(\'' + actId + '\',\'' + alumnoId + '\',this)">Guardar</button></div>');
+  }
+  function saveFeedback(actId, alumnoId, btn) {
+    var texto = val('fb-texto');
+    Model.setFeedback(actId, alumnoId, texto || null);
+    closeModal(btn); render();
+  }
+
+  /** Vista de "todo junto": nota + feedback de cada alumno/a de la actividad, con botón de copiar. */
+  function modalVerFeedback(actId) {
+    var a = Model.actividad(actId), claseId = Model.claseIdDe(a);
+    var als = Model.alumnosDe(claseId);
+    var filas = als.map(function (al) {
+      var nota = Model.notaActividad(actId, al.id);
+      var fb = Model.getFeedback(actId, al.id);
+      return '<div style="border-bottom:1px solid var(--linea);padding:10px 0">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+        '<b>' + UI.esc(al.nombre) + '</b><span class="tag">' + Engine.fmt(nota) + '</span></div>' +
+        (fb
+          ? '<div class="fb-texto" style="white-space:pre-wrap;margin:6px 0;font-size:13.5px">' + UI.esc(fb) + '</div>' +
+            '<button class="mini" onclick="App.copiarFeedbackDesde(this)">📋 Copiar comentario</button>'
+          : '<div style="color:var(--suave);font-size:13px;margin-top:4px"><i>Sin feedback todavía</i></div>') +
+        '</div>';
+    }).join('');
+    modal('<h3>Notas y feedback — ' + UI.esc(a.nombre) + '</h3>' +
+      '<div style="font-size:12px;color:var(--suave);margin-bottom:8px">Copia el comentario de cada alumno/a y pégalo en su tarea de Classroom (la API no permite escribirlo directamente).</div>' +
+      '<div style="max-height:60vh;overflow:auto">' + (filas || '<div class="empty">Sin alumnado.</div>') + '</div>' +
+      '<div class="acts"><button class="mini" onclick="App.closeModal(this)">Cerrar</button></div>');
+  }
+  /** Copia el texto del feedback mostrado justo encima del botón pulsado. */
+  function copiarFeedbackDesde(btn) {
+    var texto = btn.previousElementSibling.textContent;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(texto).then(function () { toast('Comentario copiado.'); })
+        .catch(function () { window.prompt('Copia manualmente:', texto); });
+    } else window.prompt('Copia manualmente:', texto);
+  }
+
+  /** Evolución de la nota de un alumno/a por criterio, como mini-gráfico de barras (sin librerías). */
+  function modalEvolucion(claseId, alumnoId) {
+    var c = Model.clase(claseId), area = Seed.AREAS[c.area];
+    var al = Model.alumnosDe(claseId).filter(function (x) { return x.id === alumnoId; })[0];
+    var idx = UI.critIndex(c.area);
+    var cods = [];
+    area.competencias.forEach(function (comp) { comp.criterios.forEach(function (cr) { cods.push(cr.cod); }); });
+    if (area.transversal) cods.push(area.transversal.cod);
+
+    var bloques = cods.map(function (cod) {
+      var hist = Model.historialAlumnoCriterio(alumnoId, cod);
+      var titulo = '<div style="font-size:12.5px;font-weight:600;margin-top:10px">' +
+        UI.esc(cod) + ' — ' + UI.esc(idx[cod] ? idx[cod].nombreCE : '') + '</div>';
+      if (!hist.length) {
+        return titulo + '<div style="color:var(--suave);font-size:12.5px;margin:2px 0 6px">Sin historial todavía (se irá registrando a partir de ahora).</div>';
+      }
+      var barras = hist.map(function (h) {
+        var L = Engine.levelOf(h.value);
+        var act = Model.actividad(h.actId);
+        var fecha = new Date(h.ts).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: '2-digit' });
+        var alturaPx = Math.max(4, Math.round(h.value * 4));
+        return '<div class="' + (L ? 'lv-' + L.key : '') + '" style="width:9px;height:' + alturaPx + 'px;border-radius:2px" ' +
+          'title="' + UI.esc((act ? act.nombre : 'Actividad borrada') + ' · ' + fecha + ' · ' + Engine.fmt(h.value)) + '"></div>';
+      }).join('');
+      return titulo + '<div style="display:flex;align-items:flex-end;gap:2px;height:44px;margin:2px 0 6px">' + barras + '</div>';
+    }).join('');
+
+    modal('<h3>Evolución — ' + UI.esc(al ? al.nombre : '') + '</h3>' +
+      '<div style="font-size:12px;color:var(--suave);margin-bottom:4px">Cada barra es una evaluación registrada, en orden cronológico. Pasa el ratón por encima para ver la actividad, la fecha y el valor.</div>' +
+      bloques +
+      '<div class="acts"><button class="mini" onclick="App.closeModal(this)">Cerrar</button></div>');
+  }
+
+  // ---------- banco de rúbricas ----------
+  var NIV = [ ['ne', 'No entregado / muy deficiente'], ['in', 'Insuficiente'], ['su', 'Suficiente'], ['bi', 'Bien'], ['no', 'Notable'], ['so', 'Sobresaliente'] ];
+  function modalRubrica(id) {
+    var r = id ? Model.rubrica(id) : null, niv = r ? r.niveles : {};
+    var campos = NIV.map(function (p) {
+      return '<label class="f">' + p[1] + '</label><textarea class="t" id="r-' + p[0] + '" style="min-height:52px" placeholder="Descriptor…">' + UI.esc(niv[p[0]] || '') + '</textarea>';
+    }).join('');
+    modal('<h3>' + (r ? 'Editar rúbrica' : 'Nueva rúbrica') + '</h3>' +
+      '<label class="f">Nombre</label><input class="t" id="r-nom" value="' + (r ? UI.esc(r.nombre) : '') + '" placeholder="Ej.: Rúbrica de programación">' +
+      '<label class="f">Pegar rúbrica (ChatGPT, Excel, Markdown, CSV) y convertir</label>' +
+      '<textarea class="t" id="r-paste" placeholder="Pega aquí una tabla nivel → descriptor y pulsa Convertir…"></textarea>' +
+      '<button class="mini" style="margin-top:6px" onclick="App.parseRubrica(this)">Convertir a los campos ↓</button>' +
+      campos +
+      '<div class="acts"><button class="mini" onclick="App.closeModal(this)">Cancelar</button>' +
+      '<button class="primary" onclick="App.saveRubrica(\'' + (id || '') + '\',this)">Guardar</button></div>');
+  }
+  function nivelesFromForm() {
+    var niv = {}; NIV.forEach(function (p) { niv[p[0]] = val('r-' + p[0]); }); return niv;
+  }
+  function saveRubrica(id, btn) {
+    var nom = val('r-nom'); if (!nom) return alert('Pon un nombre.');
+    var niv = nivelesFromForm();
+    if (id) Model.updateRubrica(id, nom, niv); else Model.addRubrica(nom, niv);
+    closeModal(btn); render();
+  }
+  function delRubrica(id) { if (confirm('¿Borrar la rúbrica? Las actividades que la usan quedarán como escala IN–SB.')) { Model.removeRubrica(id); render(); } }
+  /** Reparte el texto pegado en los 6 niveles buscando palabras clave por línea. */
+  function parseRubrica(btn) {
+    var text = document.getElementById('r-paste').value;
+    var keys = { ne: ['no entregado', 'muy deficiente', 'no presentado'], in: ['insuficiente'], su: ['suficiente'], bi: ['bien'], no: ['notable'], so: ['sobresaliente', 'excelente'] };
+    text.split('\n').forEach(function (line) {
+      var low = line.toLowerCase();
+      Object.keys(keys).forEach(function (k) {
+        if (keys[k].some(function (w) { return low.indexOf(w) >= 0; })) {
+          var desc = line.replace(/^[^:|\t\-–]*[:|\t\-–]\s*/, '').trim();
+          if (desc) document.getElementById('r-' + k).value = desc;
+        }
+      });
+    });
+    toast('Repartido en los niveles. Revísalo antes de guardar.');
+  }
+
+  // ---------- rejilla: un manejador por tipo de celda (todos guardan un valor 0–10 o null) ----------
+  function setCell(actId, alumnoId, cod, levelKey) { // niveles: fija el valor por defecto del nivel
+    var L = levelKey ? Engine.RUBRIC_LEVELS.filter(function (x) { return x.key === levelKey; })[0] : null;
+    var value = L ? L.def : null;
+    Model.setEval(actId, alumnoId, cod, value);
+    // refresca solo esa celda (para mostrar/ocultar y reajustar el deslizador a la nueva banda)
+    var el = document.getElementById('cell-' + actId + '-' + alumnoId + '-' + cod);
+    if (el) el.innerHTML = UI.nivelesCellInner(Model.actividad(actId), alumnoId, cod, value);
+  }
+  function setCellFine(actId, alumnoId, cod, raw) { // ajuste dentro de la banda (deslizador)
+    var n = Number((raw || '').replace(',', '.')); if (isNaN(n)) return;
+    Model.setEval(actId, alumnoId, cod, Math.max(0, Math.min(10, n)));
+  }
+  function setCellNumber(actId, alumnoId, cod, raw) { // nota directa 0–10
+    raw = (raw || '').trim().replace(',', '.');
+    if (raw === '') return Model.setEval(actId, alumnoId, cod, null);
+    var n = Number(raw); if (isNaN(n)) return;
+    var value = Math.max(0, Math.min(10, n));
+    Model.setEval(actId, alumnoId, cod, value);
+    // La misma nota se copia a los criterios aún vacíos del alumno en esta actividad; luego se afina.
+    var a = Model.actividad(actId), copiado = false;
+    if (a) (a.criterios || []).forEach(function (c) {
+      if (c !== cod && Model.getEval(actId, alumnoId, c) == null) { Model.setEval(actId, alumnoId, c, value); copiado = true; }
+    });
+    if (copiado) render();
+  }
+
+  // ---------- asistencia (pasar lista) ----------
+  function todayStr() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function abrirAsistencia(claseId) { view.name = 'asistencia'; view.claseId = claseId; view.fecha = todayStr(); render(); }
+  function asistShift(days) {
+    var d = new Date(view.fecha + 'T00:00:00'); d.setDate(d.getDate() + days);
+    view.fecha = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); render();
+  }
+  function asistHoy() { view.fecha = todayStr(); render(); }
+  function toggleAsist(alumnoId) { // Presente → Falta → Justificada → Presente
+    var next = { 'null': 'F', 'F': 'J', 'J': null };
+    var cur = Model.getAsistencia(view.claseId, view.fecha, alumnoId);
+    Model.setAsistencia(view.claseId, view.fecha, alumnoId, next[cur === null ? 'null' : cur]);
+    render();
+  }
+
+  // ---------- agenda / planificador ----------
+  function lunesISO(base) {
+    var d = base ? new Date(base + 'T00:00:00') : new Date();
+    var wd = (d.getDay() + 6) % 7; // 0 = lunes
+    d.setDate(d.getDate() - wd);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function isoDe(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function abrirAgenda() { view.name = 'agenda'; view.semana = lunesISO(); render(); }
+  function setAgendaMode(m) { view.agendaMode = m; render(); }
+  function agendaShift(days) { var d = new Date(view.semana + 'T00:00:00'); d.setDate(d.getDate() + days); view.semana = isoDe(d); render(); }
+  function agendaMes(delta) { var d = new Date(view.semana + 'T00:00:00'); d.setMonth(d.getMonth() + delta); view.semana = isoDe(d); render(); }
+  function agendaHoy() { view.semana = lunesISO(); render(); }
+
+  /** Genera un resumen (diario de aula + reuniones) del mes visible en PDF (Apps Script) o imprimible (local). */
+  function resumenPDF() {
+    var a = new Date(view.semana + 'T00:00:00');
+    var desde = isoDe(new Date(a.getFullYear(), a.getMonth(), 1));
+    var hasta = isoDe(new Date(a.getFullYear(), a.getMonth() + 1, 0));
+    var mesTxt = a.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+    var entradas = Model.entradasEntre(desde, hasta);
+    var diario = entradas.filter(function (e) { return e.tipo === 'sesion' && e.diario; });
+    var reuniones = entradas.filter(function (e) { return e.tipo === 'reunion'; });
+    var esc = UI.esc;
+    function fila(fecha, izq, der) {
+      var d = new Date(fecha + 'T00:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short' });
+      return '<tr><td style="white-space:nowrap;vertical-align:top;padding:6px 10px;border-bottom:1px solid #ddd;text-transform:capitalize">' + d +
+        '</td><td style="vertical-align:top;padding:6px 10px;border-bottom:1px solid #ddd"><b>' + esc(izq) + '</b><br>' + esc(der).replace(/\n/g, '<br>') + '</td></tr>';
+    }
+    var html = '<html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;color:#222;font-size:12px}h1{color:#1f7a5c;font-size:20px}h2{color:#155c45;border-bottom:2px solid #1f7a5c;padding-bottom:4px;margin-top:22px}table{border-collapse:collapse;width:100%}</style></head><body>' +
+      '<h1>Cuaderno de Robótica y Fabricación Digital — Resumen de ' + esc(mesTxt) + '</h1>' +
+      '<h2>Diario de aula</h2>';
+    if (diario.length) {
+      html += '<table>' + diario.map(function (e) {
+        var c = Model.clase(e.claseId), g = c && Model.grupo(c.grupoId);
+        return fila(e.fecha, (c ? g.nombre + ' · ' + c.area : 'Sesión') + (e.plan ? ' — ' + e.plan : ''), e.diario);
+      }).join('') + '</table>';
+    } else { html += '<p><i>Sin registros de diario este mes.</i></p>'; }
+    html += '<h2>Reuniones</h2>';
+    if (reuniones.length) {
+      html += '<table>' + reuniones.map(function (e) { return fila(e.fecha, e.titulo || 'Reunión', e.plan || ''); }).join('') + '</table>';
+    } else { html += '<p><i>Sin reuniones este mes.</i></p>'; }
+    html += '</body></html>';
+
+    pdfOrPrint('Resumen ' + mesTxt, html, 'resumen');
+  }
+
+  /** Genera el PDF en el servidor (Apps Script) o abre una ventana imprimible (local). */
+  function pdfOrPrint(nombre, html, tipo) {
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run
+        .withSuccessHandler(function (url) { if (url) window.open(url, '_blank'); })
+        .withFailureHandler(function (e) { alert('No se pudo crear el PDF: ' + (e && e.message ? e.message : e)); })
+        .crearPDF(nombre, html, tipo || '');
+    } else {
+      var w = window.open('', '_blank');
+      if (w) { w.document.write(html); w.document.close(); w.focus(); w.print(); }
+    }
+  }
+
+  /** Informe individual con trazabilidad: actividad → nota de criterio → nota de CE → nota final. */
+  function informeAlumno(claseId, alumnoId) {
+    var c = Model.clase(claseId), g = Model.grupo(c.grupoId), area = Seed.AREAS[c.area], def = Seed.toEngineDef(area);
+    var al = Model.alumnosDe(claseId).filter(function (a) { return a.id === alumnoId; })[0];
+    var idx = UI.critIndex(c.area), esc = UI.esc, fmt = Engine.fmt;
+    var lvl = function (v) { var L = Engine.levelOf(v); return L ? L.label : ''; };
+    var r = Engine.computeAlumno(def, Model.evalsAlumnoClase(claseId, alumnoId));
+
+    // trazabilidad: cod -> [{act, v}]
+    var trace = {};
+    Model.getState().actividades.forEach(function (a) {
+      if (Model.claseIdDe(a) !== claseId || a.informativa) return;
+      (a.criterios || []).forEach(function (cod) {
+        var v = Model.getEval(a.id, alumnoId, cod);
+        if (typeof v === 'number') { (trace[cod] = trace[cod] || []).push({ act: a.nombre, v: v }); }
+      });
+    });
+    var listaActs = function (cod) {
+      var xs = trace[cod] || [];
+      return xs.length
+        ? '<ul style="margin:4px 0 8px 18px">' + xs.map(function (x) { return '<li>' + esc(x.act) + ': <b>' + fmt(x.v) + '</b> (' + lvl(x.v) + ')</li>'; }).join('') + '</ul>'
+        : '<p style="margin:2px 0 8px 18px;color:#888"><i>Sin evaluar.</i></p>';
+    };
+
+    var html = '<html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;color:#222;font-size:12px;line-height:1.35}' +
+      'h1{color:#1f7a5c;font-size:19px;margin-bottom:2px}h2{color:#155c45;font-size:14px;border-bottom:2px solid #1f7a5c;padding-bottom:3px;margin:18px 0 6px}' +
+      'h3{font-size:12px;margin:8px 0 2px}.nota{color:#1f7a5c;font-weight:bold}ul{margin:0}</style></head><body>';
+    html += '<h1>Informe individual — ' + esc(al.nombre) + '</h1>';
+    html += '<p>' + esc(g.nombre) + ' · ' + esc(c.area) + ' &nbsp;·&nbsp; <b>Nota final: <span class="nota">' + fmt(r.final) + '</span></b></p>';
+    area.competencias.forEach(function (comp) {
+      var ceNota = (r.perCE.filter(function (x) { return x.ce === comp.ce; })[0] || {}).nota;
+      html += '<h2>CE' + comp.ce + " · " + esc(comp.nombre) + ' — nota <span class="nota">' + fmt(ceNota) + '</span></h2>';
+      comp.criterios.forEach(function (cr) {
+        html += '<h3>' + esc(cr.cod) + ' — ' + esc(cr.doc) + ' <span class="nota">(nota ' + fmt(r.perCriterio[cr.cod]) + ')</span></h3>' + listaActs(cr.cod);
+      });
+    });
+    html += '<h2>Criterio transversal (T) — nota <span class="nota">' + fmt(r.perCriterio['T']) + '</span></h2>';
+    html += '<p style="margin:2px 0 4px">' + esc(area.transversal ? area.transversal.doc : '') + '</p>' + listaActs('T');
+    html += '<p style="font-size:10px;color:#666;margin-top:16px">Cálculo: nota de criterio = media de sus actividades · nota de CE = 90 % de sus criterios + 10 % del transversal · nota final = media de las cuatro CE.</p>';
+    html += '</body></html>';
+    pdfOrPrint('Informe ' + al.nombre, html, 'informe');
+  }
+  function toggleTarea(id) { var e = Model.entrada(id); if (e) { Model.updateEntrada(id, { done: !e.done }); render(); } }
+
+  function modalEntrada(fecha, id) {
+    var e = id ? Model.entrada(id) : null;
+    var tipo = e ? e.tipo : 'sesion';
+    var opClases = Model.getState().clases.map(function (c) {
+      var g = Model.grupo(c.grupoId);
+      return '<option value="' + c.id + '"' + (e && e.claseId === c.id ? ' selected' : '') + '>' + UI.esc(g.nombre) + ' · ' + UI.esc(c.area) + '</option>';
+    }).join('');
+    modal('<h3>' + (e ? 'Editar entrada' : 'Nueva entrada') + '</h3>' +
+      '<label class="f">Fecha</label><input class="t" id="e-fecha" type="date" value="' + (e ? e.fecha : fecha) + '">' +
+      '<label class="f">Tipo</label><select class="t" id="e-tipo" onchange="App.onTipoEntrada(this.value)">' +
+        '<option value="sesion"' + (tipo === 'sesion' ? ' selected' : '') + '>Sesión de clase</option>' +
+        '<option value="reunion"' + (tipo === 'reunion' ? ' selected' : '') + '>Reunión</option>' +
+        '<option value="tarea"' + (tipo === 'tarea' ? ' selected' : '') + '>Tarea / recordatorio</option>' +
+      '</select>' +
+      '<div id="e-box-clase"><label class="f">Clase</label><select class="t" id="e-clase">' + opClases + '</select></div>' +
+      '<div id="e-box-titulo"><label class="f">Título</label><input class="t" id="e-titulo" value="' + (e ? UI.esc(e.titulo) : '') + '" placeholder="Reunión de departamento / Preparar material…"></div>' +
+      '<label class="f" id="e-lab-plan">Qué haré / notas</label><textarea class="t" id="e-plan">' + (e ? UI.esc(e.plan) : '') + '</textarea>' +
+      '<div id="e-box-diario"><label class="f">Qué se hizo (diario de aula)</label><textarea class="t" id="e-diario">' + (e ? UI.esc(e.diario) : '') + '</textarea></div>' +
+      '<div class="acts"><button class="mini" onclick="App.closeModal(this)">Cancelar</button>' +
+      '<button class="primary" onclick="App.saveEntrada(\'' + (id || '') + '\',this)">Guardar</button></div>');
+    onTipoEntrada(tipo);
+  }
+  function onTipoEntrada(tipo) {
+    document.getElementById('e-box-clase').style.display = (tipo === 'sesion') ? '' : 'none';
+    document.getElementById('e-box-titulo').style.display = (tipo === 'sesion') ? 'none' : '';
+    document.getElementById('e-box-diario').style.display = (tipo === 'sesion') ? '' : 'none';
+    document.getElementById('e-lab-plan').textContent = (tipo === 'sesion') ? 'Qué haré (plan)' : 'Notas';
+  }
+  function abrirEntrada(id) { var e = Model.entrada(id); if (e) modalEntrada(e.fecha, id); }
+  function saveEntrada(id, btn) {
+    var tipo = val('e-tipo');
+    var data = { fecha: val('e-fecha'), tipo: tipo, plan: val('e-plan'),
+      claseId: tipo === 'sesion' ? val('e-clase') : null,
+      titulo: tipo === 'sesion' ? '' : val('e-titulo'),
+      diario: tipo === 'sesion' ? val('e-diario') : '' };
+    if (!data.fecha) return alert('Pon una fecha.');
+    if (id) Model.updateEntrada(id, data); else Model.addEntrada(data);
+    closeModal(btn); render();
+  }
+  function delEntrada(id) { if (confirm('¿Borrar esta entrada?')) { Model.removeEntrada(id); render(); } }
+
+  // ---------- copiar resumen (para hoja / Séneca / Classroom) ----------
+  function copiarResumen(claseId) {
+    var c = Model.clase(claseId), area = Seed.AREAS[c.area], def = Seed.toEngineDef(area), als = Model.alumnosDe(claseId);
+    var cods = [];
+    area.competencias.forEach(function (comp) { comp.criterios.forEach(function (cr) { cods.push(cr.cod); }); });
+    var fc = function (n) { return n == null ? '' : n.toFixed(2).replace('.', ','); };
+    var header = ['Alumno/a'].concat(cods)
+      .concat(area.competencias.map(function (comp) { return 'CE' + comp.ce; })).concat(['T', 'Nota final']);
+    var rows = [header.join('\t')];
+    als.forEach(function (al) {
+      var r = Engine.computeAlumno(def, Model.evalsAlumnoClase(claseId, al.id));
+      var line = [al.nombre];
+      cods.forEach(function (cod) { line.push(fc(r.perCriterio[cod])); });
+      r.perCE.forEach(function (x) { line.push(fc(x.nota)); });
+      line.push(fc(r.perCriterio['T'])); line.push(fc(r.final));
+      rows.push(line.join('\t'));
+    });
+    var text = rows.join('\n');
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(text).then(function () { toast('Tabla copiada. Pégala en una hoja, Séneca o Classroom.'); })
+        .catch(function () { window.prompt('Copia manualmente:', text); });
+    else window.prompt('Copia manualmente:', text);
+  }
+
+  // ---------- copia de seguridad ----------
+  function exportar() {
+    var blob = new Blob([Model.exportJSON()], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'cuaderno-ryfd-' + new Date().toISOString().slice(0, 10) + '.json';
+    a.click(); toast('Copia descargada.');
+  }
+  function importar(e) {
+    var f = e.target.files[0]; if (!f) return;
+    var r = new FileReader();
+    r.onload = function () { try { Model.importJSON(r.result); render(); toast('Datos restaurados.'); } catch (x) { alert('Fichero no válido.'); } };
+    r.readAsText(f); e.target.value = '';
+  }
+
+  // ---------- utilidades ----------
+  function val(id) { return (document.getElementById(id).value || '').trim(); }
+  function lines(id) { return document.getElementById(id).value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean); }
+  var toastTimer;
+  function toast(msg) {
+    var t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2600);
+  }
+
+  root.App = {
+    go: go, openClase: openClase, openProyecto: openProyecto, openActividad: openActividad, verResumen: verResumen,
+    modalGrupo: modalGrupo, saveGrupo: saveGrupo, delGrupo: delGrupo,
+    modalClase: modalClase, selColor: selColor, saveClase: saveClase, delClase: delClase,
+    modalEditarAlumnado: modalEditarAlumnado, saveEditarAlumnado: saveEditarAlumnado,
+    modalProyecto: modalProyecto, saveProyecto: saveProyecto, delProyecto: delProyecto,
+    modalActividad: modalActividad, modalCriterios: modalCriterios, saveCriterios: saveCriterios, onTipoChange: onTipoChange, toggleChip: toggleChip, toggleClassroomBox: toggleClassroomBox, saveActividad: saveActividad, delActividad: delActividad,
+    modalFeedback: modalFeedback, saveFeedback: saveFeedback, modalVerFeedback: modalVerFeedback, copiarFeedbackDesde: copiarFeedbackDesde,
+    modalEvolucion: modalEvolucion,
+    modalRubrica: modalRubrica, saveRubrica: saveRubrica, delRubrica: delRubrica, parseRubrica: parseRubrica,
+    setCell: setCell, setCellFine: setCellFine, setCellNumber: setCellNumber,
+    abrirAsistencia: abrirAsistencia, asistShift: asistShift, asistHoy: asistHoy, toggleAsist: toggleAsist,
+    abrirAgenda: abrirAgenda, agendaShift: agendaShift, agendaMes: agendaMes, agendaHoy: agendaHoy, setAgendaMode: setAgendaMode, resumenPDF: resumenPDF, toggleTarea: toggleTarea,
+    modalEntrada: modalEntrada, onTipoEntrada: onTipoEntrada, abrirEntrada: abrirEntrada, saveEntrada: saveEntrada, delEntrada: delEntrada,
+    copiarResumen: copiarResumen, informeAlumno: informeAlumno,
+    closeModal: closeModal, exportar: exportar, importar: importar, render: render
+  };
+
+  document.addEventListener('DOMContentLoaded', render);
+})(typeof window !== 'undefined' ? window : this);
+</script>

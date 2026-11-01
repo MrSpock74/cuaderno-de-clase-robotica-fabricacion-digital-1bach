@@ -1,0 +1,66 @@
+<script>
+/*
+ * seed.js — Datos de la materia Robótica y Fabricación Digital I.
+ * Solo datos. Cada competencia lleva: ce, nombre, enun (enunciado que se muestra al pasar el ratón) y criterios.
+ * Cada criterio lleva: cod, doc (redacción docente) y alu (versión para el alumnado).
+ * El criterio transversal es común y se pondera al 10 % dentro de cada competencia.
+ * Redacción generalizada (agnóstica de herramienta): el instrumento se concreta en el aula y en las rúbricas.
+ *
+ * Nota: se incluye únicamente "RyFD I" (1.º de Bachillerato). Para otro curso o materia, añade tu propia
+ * entrada dentro de AREAS con el mismo formato (competencias, criterios y, si lo hay, un criterio transversal).
+ */
+(function (root) {
+  'use strict';
+
+  var TRANSVERSAL = {
+    cod: 'T',
+    doc: 'Trabaja con constancia y autonomía: cumple los plazos y mantiene su porfolio de evidencias completo y al día. Participar, preguntar y proponer suma, pero su ausencia no penaliza.',
+    alu: 'Trabajo cada día, entrego a tiempo y tengo mi porfolio completo.'
+  };
+
+  var AREAS = {
+    'RyFD I': {
+      nombre: 'Robótica y Fabricación Digital I',
+      nivel: '1.º Bachillerato',
+      color: '#1F7A5C',
+      competencias: [
+        { ce: 1, nombre: 'Pensamiento computacional y programación', enun: 'Resolver problemas y automatizar tareas aplicando el pensamiento computacional: descomponer, diseñar algoritmos y programar (por bloques o texto), depurar y documentar, con apoyo comprensivo de la IA.', criterios: [
+          { cod: '1.1', doc: 'Descompone un problema en pasos lógicos y diseña e implementa una solución algorítmica que funciona, empleando secuencias, decisiones, repeticiones y datos, mediante un lenguaje o entorno de programación por bloques o textual, para automatizar una tarea o resolver un reto del entorno.', alu: 'Divido el problema y hago un programa que funciona, con decisiones, repeticiones y datos (con bloques o con código).' },
+          { cod: '1.2', doc: 'Prueba, localiza y corrige los errores de un programa, interpretando su comportamiento y los mensajes de error, hasta lograr un funcionamiento correcto y validado en distintos casos.', alu: 'Cuando algo falla, encuentro el error y lo arreglo, y compruebo que funciona en varios casos.' },
+          { cod: '1.3', doc: 'Documenta y explica el funcionamiento, la estructura y la utilidad del programa mediante comentarios y su porfolio, valorando de forma crítica y honesta la ayuda recibida de asistentes de IA.', alu: 'Explico qué hace mi programa y para qué sirve, y digo con honestidad en qué me ayudó la IA.' }
+        ]},
+        { ce: 2, nombre: 'Robótica y sistemas de control', enun: 'Diseñar, montar y programar sistemas físicos interactivos y automatismos con placa, sensores y actuadores para que respondan al entorno, documentando el proceso.', criterios: [
+          { cod: '2.1', doc: 'Monta e interconecta de forma segura sensores, actuadores y una placa controladora a partir de un esquema, identificando la función de cada componente y respetando las normas de seguridad.', alu: 'Conecto bien y con seguridad los sensores, los actuadores y la placa siguiendo el esquema.' },
+          { cod: '2.2', doc: 'Programa el comportamiento del sistema para que responda de forma automática a la información captada por los sensores, empleando estructuras de control y actuando sobre los actuadores.', alu: 'Programo el sistema para que reaccione a lo que detectan los sensores.' },
+          { cod: '2.3', doc: 'Elabora una memoria técnica del proyecto que recoja el esquema de conexiones, el programa y la evaluación de su funcionamiento, proponiendo posibles mejoras.', alu: 'Explico cómo lo monté, qué hace el programa y si funciona o qué mejoraría.' }
+        ]},
+        { ce: 3, nombre: 'Diseño y fabricación digital', enun: 'Idear, diseñar y fabricar objetos y piezas funcionales con CAD y fabricación digital (impresión 3D, corte láser), aplicando criterios de función, seguridad y sostenibilidad.', criterios: [
+          { cod: '3.1', doc: 'Diseña piezas u objetos con software CAD, definiendo la forma y las medidas adecuadas a su función a partir de bocetos previos o de la medición real de los componentes.', alu: 'Diseño en 3D una pieza con la forma y las medidas que necesita para servir.' },
+          { cod: '3.2', doc: 'Prepara los archivos de fabricación y obtiene el prototipo mediante una técnica de fabricación digital (impresión 3D o corte láser), ajustando los parámetros y aplicando las normas de seguridad y sostenibilidad.', alu: 'Preparo el archivo y fabrico la pieza (3D o láser) con seguridad y sin desperdiciar material.' },
+          { cod: '3.3', doc: 'Documenta el proceso de diseño y fabricación mediante su porfolio y valora el resultado obtenido, verificando su ajuste y funcionalidad.', alu: 'Explico cómo diseñé y fabriqué la pieza y valoro si quedó bien.' }
+        ]},
+        { ce: 4, nombre: 'Tecnologías emergentes, IA y ciudadanía digital', enun: 'Utilizar de forma comprensiva y responsable tecnologías emergentes, en especial la IA, analizando su impacto y comunicando lo aprendido.', criterios: [
+          { cod: '4.1', doc: 'Utiliza una herramienta de inteligencia artificial accesible o un montaje tecnológico sencillo (IoT, sensores…) para resolver una tarea concreta, comprendiendo de forma básica cómo funciona.', alu: 'Uso una herramienta de IA (o un montaje sencillo) para resolver algo concreto.' },
+          { cod: '4.2', doc: 'Analiza de forma crítica las oportunidades y los riesgos de la tecnología empleada (privacidad, sesgos, impacto social y ambiental), a partir de ejemplos y de su propia experiencia.', alu: 'Explico lo bueno y lo malo de la tecnología: privacidad, sesgos e impacto.' },
+          { cod: '4.3', doc: 'Comunica lo aprendido y los resultados obtenidos mediante una presentación o un documento claro, empleando vocabulario técnico y declarando con honestidad el uso de la IA.', alu: 'Presento lo que he aprendido de forma clara y honesta sobre el uso de la IA.' }
+        ]}
+      ],
+      transversal: TRANSVERSAL
+    }
+  };
+
+  function toEngineDef(area) {
+    return {
+      ces: area.competencias.map(function (c) {
+        return { ce: c.ce, criterios: c.criterios.map(function (x) { return x.cod; }) };
+      }),
+      transCod: area.transversal ? area.transversal.cod : null
+    };
+  }
+
+  var Seed = { AREAS: AREAS, TRANSVERSAL: TRANSVERSAL, toEngineDef: toEngineDef };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = Seed;
+  else root.Seed = Seed;
+})(typeof window !== 'undefined' ? window : this);
+</script>

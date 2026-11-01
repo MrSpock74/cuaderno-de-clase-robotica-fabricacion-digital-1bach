@@ -1,0 +1,382 @@
+<script>
+/*
+ * ui.js — Construye el HTML de cada vista a partir de Model/Seed/Engine (solo lectura).
+ * No modifica el estado: eso lo hace app.js mediante los manejadores App.*
+ */
+(function (root) {
+  'use strict';
+  var Model = root.Model, Seed = root.Seed, Engine = root.Engine;
+
+  function esc(s) { return (s || '').replace(/[&<>"]/g, function (m) {
+    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[m]; }); }
+
+  /** Índice cod → {doc, alu, ce, nombreCE} para un área, incluido el transversal 'T'. */
+  function critIndex(areaKey) {
+    var area = Seed.AREAS[areaKey], idx = {};
+    area.competencias.forEach(function (c) {
+      c.criterios.forEach(function (cr) { idx[cr.cod] = { doc: cr.doc, alu: cr.alu, ce: c.ce, nombreCE: c.nombre }; });
+    });
+    if (area.transversal) idx[area.transversal.cod] = { doc: area.transversal.doc, alu: area.transversal.alu, ce: 'T', nombreCE: 'Transversal' };
+    return idx;
+  }
+
+  function cardsGrid(cards) { return '<div class="cards">' + cards.join('') + '</div>'; }
+  function claseNota(n) { return n == null ? '' : (n >= 5 ? 'n-alta' : (n >= 4 ? 'n-media' : 'n-baja')); }
+
+  // ---------- GRUPOS ----------
+  function grupos() {
+    var st = Model.getState();
+    var h = '<h2 class="section">Grupos <button class="primary" onclick="App.modalGrupo()">+ Nuevo grupo</button></h2>' +
+      '<div class="hint">Un <b>grupo</b> es tu lista de alumnado. Se crea una vez y se reutiliza en varias clases.</div>';
+    if (!st.grupos.length) return h + '<div class="empty">Aún no tienes grupos.</div>';
+    return h + cardsGrid(st.grupos.map(function (g) {
+      return '<div class="card" onclick="App.modalGrupo(\'' + g.id + '\')">' +
+        '<button class="del" title="Borrar" onclick="event.stopPropagation();App.delGrupo(\'' + g.id + '\')">✕</button>' +
+        '<h3>' + esc(g.nombre) + '</h3><div class="meta">' + esc(g.curso || '') + ' · ' + g.alumnos.length + ' alumnos/as</div></div>';
+    }));
+  }
+
+  // ---------- CLASES ----------
+  function clases() {
+    var st = Model.getState();
+    var h = '<h2 class="section">Clases <button class="primary" title="Crear una clase nueva: eliges asignatura (RyFD I/II) y pegas o importas el alumnado" onclick="App.modalClase()">+ Nueva clase</button></h2>' +
+      '<div class="hint">Crea una clase eligiendo la asignatura (RyFD I/II) y pegando o importando el alumnado. Aquí evalúas por criterios.</div>';
+    if (!st.clases.length) return h + '<div class="empty">Aún no tienes clases. Crea la primera, o usa «⿻ Classroom» para importar un curso.</div>';
+    return h + cardsGrid(st.clases.map(function (c) {
+      var g = Model.grupo(c.grupoId);
+      return '<div class="card" onclick="App.openClase(\'' + c.id + '\')">' +
+        '<div class="barra" style="background:' + c.color + '"></div>' +
+        '<button class="del" title="Borrar" onclick="event.stopPropagation();App.delClase(\'' + c.id + '\')">✕</button>' +
+        '<h3>' + esc(g ? g.nombre : '?') + ' · ' + esc(c.area) + '</h3>' +
+        '<div class="meta">' + Model.proyectosDe(c.id).length + ' proyectos</div></div>';
+    }));
+  }
+
+  // ---------- CLASE (proyectos) ----------
+  function actCard(a) {
+    return '<div class="card" onclick="App.openActividad(\'' + a.id + '\')">' +
+      '<button class="del" title="Borrar" onclick="event.stopPropagation();App.delActividad(\'' + a.id + '\')">✕</button>' +
+      '<h3>' + esc(a.nombre) + '</h3><div class="meta">' + (a.informativa ? 'No cuenta · ' : '') + ((a.criterios || []).join(', ') || 'sin criterios') + '</div></div>';
+  }
+  function clase(claseId) {
+    var c = Model.clase(claseId), g = Model.grupo(c.grupoId);
+    var h = '<div class="crumbs"><a onclick="App.go(\'clases\')">Clases</a> › ' + esc(g.nombre) + ' · ' + esc(c.area) + '</div>' +
+      '<h2 class="section">' + esc(g.nombre) + ' · ' + esc(c.area) +
+      ' <button class="primary" title="Crear un proyecto: agrupa varias actividades en torno a un reto" onclick="App.modalProyecto()">+ Nuevo proyecto</button>' +
+      ' <button class="ghost" title="Crear una actividad que no cuelga de ningún proyecto (una prueba o tarea puntual)" onclick="App.modalActividad()">+ Actividad suelta</button>' +
+      ' <button class="ghost" title="Cambiar el nombre de la clase o editar su alumnado (conserva las notas)" onclick="App.modalEditarAlumnado(\'' + c.id + '\')">✏️ Editar clase</button>' +
+      ((typeof window !== 'undefined' && window.__CLASSROOM__ && c.courseId)
+        ? ' <button class="ghost" title="Comprobar en Classroom si hay alumnado nuevo (se añade solo) o quien ya no está matriculado (se avisa, no se borra)" onclick="App.actualizarAlumnadoClassroom(\'' + c.id + '\')">🔄 Actualizar alumnado</button>'
+        : '') +
+      ' <button class="ghost" title="Pasar lista del día: marca faltas y ve el total de cada alumno" onclick="App.abrirAsistencia(\'' + c.id + '\')">🗓 Pasar lista</button>' +
+      ' <button class="ghost" title="Ver la nota por criterio, por competencia y la final de cada alumno" onclick="App.verResumen(\'' + c.id + '\')">📊 Resumen</button></h2>';
+    var ps = Model.proyectosDe(c.id), sueltas = Model.actividadesSueltasDe(c.id);
+    h += '<h3 style="margin:16px 0 2px;font-size:15px">Proyectos</h3>';
+    h += ps.length ? cardsGrid(ps.map(function (p) {
+      return '<div class="card" onclick="App.openProyecto(\'' + p.id + '\')">' +
+        '<button class="del" title="Borrar" onclick="event.stopPropagation();App.delProyecto(\'' + p.id + '\')">✕</button>' +
+        '<h3>' + esc(p.nombre) + '</h3><div class="meta">' + Model.actividadesDe(p.id).length + ' actividades</div></div>';
+    })) : '<div class="empty">Sin proyectos.</div>';
+    h += '<h3 style="margin:22px 0 2px;font-size:15px">Actividades sueltas</h3>';
+    h += sueltas.length ? cardsGrid(sueltas.map(actCard)) : '<div class="empty">Sin actividades sueltas. Úsalas para pruebas o tareas puntuales.</div>';
+    return h;
+  }
+
+  // ---------- PROYECTO (actividades) ----------
+  function proyecto(proyId) {
+    var p = Model.proyecto(proyId), c = Model.clase(p.claseId), g = Model.grupo(c.grupoId);
+    var bloqueTema = (typeof window !== 'undefined' && window.__CLASSROOM__ && c.courseId)
+      ? (p.topicId
+          ? ' <span class="tag" title="Las tareas que crees desde las actividades de este proyecto caerán en este tema">🔗 Tema: ' + esc(p.topicName || '(sin nombre)') + '</span>' +
+            ' <button class="mini" title="Desvincular este proyecto de su tema de Classroom" onclick="App.desvincularTemaClassroom(\'' + p.id + '\')">✕ Desvincular</button>'
+          : ' <button class="ghost" title="Vincular este proyecto a un tema de Classroom (existente o nuevo), para que las tareas que crees aquí caigan agrupadas en él" onclick="App.vincularTemaClassroom(\'' + p.id + '\')">🔗 Vincular a un tema</button>')
+      : '';
+    var h = '<div class="crumbs"><a onclick="App.go(\'clases\')">Clases</a> › <a onclick="App.openClase(\'' + c.id + '\')">' + esc(g.nombre) + ' · ' + esc(c.area) + '</a> › ' + esc(p.nombre) + '</div>' +
+      '<h2 class="section">' + esc(p.nombre) + ' <button class="primary" title="Crear una actividad dentro de este proyecto (rúbrica o nota directa), ligada a criterios" onclick="App.modalActividad(\'' + p.id + '\')">+ Nueva actividad</button>' + bloqueTema + '</h2>' +
+      '<div class="hint">Elige el tipo (Niveles/rúbrica o Nota directa) y los criterios que evalúa cada actividad.</div>';
+    var as = Model.actividadesDe(p.id);
+    if (!as.length) return h + '<div class="empty">Sin actividades.</div>';
+    return h + cardsGrid(as.map(actCard));
+  }
+
+  // ---------- ACTIVIDAD (rejilla; el widget depende del tipo) ----------
+  var TIPO_LABEL = { niveles: 'Niveles', directa: 'Nota directa' };
+
+  function opt(value, label, selected) { return '<option value="' + value + '"' + (selected ? ' selected' : '') + '>' + label + '</option>'; }
+
+  /** Contenido de una celda de tipo Niveles: selector de nivel + deslizador dentro de la banda. */
+  function nivelesCellInner(a, alId, cod, value) {
+    var sel = Engine.levelOf(value);
+    var opts = [opt('', '— sin evaluar', value == null)];
+    Engine.RUBRIC_LEVELS.forEach(function (L) { opts.push(opt(L.key, L.label + ' (' + Engine.fmt(L.def) + ')', sel && sel.key === L.key)); });
+    var html = '<select class="cell" onchange="App.setCell(\'' + a.id + '\',\'' + alId + '\',\'' + cod + '\',this.value)">' + opts.join('') + '</select>';
+    if (sel && value != null) {
+      html += '<div class="fine"><input type="range" min="' + sel.min + '" max="' + sel.max + '" step="0.1" value="' + value + '" ' +
+        'oninput="this.parentNode.querySelector(\'.slbl\').textContent=(+this.value).toFixed(1).replace(String.fromCharCode(46),String.fromCharCode(44))" ' +
+        'onchange="App.setCellFine(\'' + a.id + '\',\'' + alId + '\',\'' + cod + '\',this.value)">' +
+        '<span class="slbl">' + value.toFixed(1).replace('.', ',') + '</span></div>';
+    }
+    return html;
+  }
+
+  /** Widget de celda según el tipo de actividad (todos guardan un valor 0–10). */
+  function cell(a, alId, cod, value) {
+    if (a.tipo === 'directa')
+      return '<input class="cell" type="number" min="0" max="10" step="0.1" value="' + (value == null ? '' : value) +
+        '" onchange="App.setCellNumber(\'' + a.id + '\',\'' + alId + '\',\'' + cod + '\',this.value)">';
+    return '<div id="cell-' + a.id + '-' + alId + '-' + cod + '">' + nivelesCellInner(a, alId, cod, value) + '</div>';
+  }
+
+  function actividad(actId) {
+    var a = Model.actividad(actId), p = a.proyectoId ? Model.proyecto(a.proyectoId) : null;
+    var c = Model.clase(Model.claseIdDe(a)), g = Model.grupo(c.grupoId);
+    var idx = critIndex(c.area), als = Model.alumnosDe(c.id), crits = a.criterios || [];
+    var h = '<div class="crumbs"><a onclick="App.go(\'clases\')">Clases</a> › <a onclick="App.openClase(\'' + c.id + '\')">' + esc(g.nombre) + '</a> › ' +
+      (p ? '<a onclick="App.openProyecto(\'' + p.id + '\')">' + esc(p.nombre) + '</a> › ' : '') + esc(a.nombre) + '</div>' +
+      '<h2 class="section">' + esc(a.nombre) + ' <span class="tag">' + (TIPO_LABEL[a.tipo] || a.tipo) + '</span>' +
+      (a.informativa ? ' <span class="tag">no cuenta</span>' : '') +
+      ' <button class="ghost" title="Cambiar los criterios a los que está asociada esta actividad (por ejemplo, añadir el 1.3)" onclick="App.modalCriterios(\'' + a.id + '\')">✏️ Criterios</button>' +
+      ' <button class="ghost" title="Ver la nota y el feedback de todo el alumnado juntos, para copiar y pegar en Classroom sin abrir uno a uno" onclick="App.modalVerFeedback(\'' + a.id + '\')">📋 Ver notas y feedback</button>' +
+      ((typeof window !== 'undefined' && window.__CLASSROOM__ && c.courseId) ?
+        (a.courseWorkId
+          ? ' <span class="tag" title="Importar/exportar usarán siempre esta misma tarea de Classroom">🔗 Vinculada</span>' +
+            ' <button class="mini" title="Desvincular esta actividad de su tarea de Classroom" onclick="App.desvincularClassroom(\'' + a.id + '\')">✕ Desvincular</button>'
+          : ' <button class="ghost" title="Elegir una tarea de Classroom ya creada (por ejemplo, donde el alumnado ya entrega algo) para que Importar/Exportar la usen siempre, sin crear una nueva" onclick="App.vincularTareaExistente(\'' + a.id + '\')">🔗 Vincular a tarea existente</button>') +
+        ' <button class="ghost" title="Traer a esta actividad la nota de cada criterio calculada por la app de Python (lee la hoja de esa app)" onclick="App.cImportDesglose(\'' + a.id + '\')">📥 Importar desglose por criterios</button>' +
+        ' <button class="ghost" title="Traer a esta actividad las notas de una tarea o test de Classroom (se normalizan a /10)" onclick="App.cImportNotas(\'' + a.id + '\')">⿻ Importar notas</button>' +
+        ' <button class="ghost" title="Enviar la nota de esta actividad a Classroom (crea una tarea la primera vez; luego reutiliza la misma)" onclick="App.cExportNotas(\'' + a.id + '\')">⿻ Exportar notas</button>' : '') + '</h2>';
+    if (!crits.length) return h + '<div class="empty">Esta actividad no tiene criterios asignados.</div>';
+    if (!als.length) return h + '<div class="empty">El grupo no tiene alumnado.</div>';
+    // leyenda de criterios
+    h += '<div class="hint">' + crits.map(function (cod) {
+      return '<b>' + esc(cod) + '</b> ' + esc(idx[cod] ? idx[cod].doc : ''); }).join('<br>') + '</div>';
+    // descriptores de la rúbrica (si la actividad usa una)
+    var rb = a.rubricaId ? Model.rubrica(a.rubricaId) : null;
+    if (rb) {
+      h += '<div class="hint"><b>Rúbrica: ' + esc(rb.nombre) + '</b><br>' +
+        Engine.RUBRIC_LEVELS.map(function (L) { return '<b>' + esc(L.label) + ':</b> ' + esc(rb.niveles[L.key] || '—'); }).join('<br>') + '</div>';
+    }
+    h += '<div class="wrap"><table class="grid"><thead><tr><th class="nombre">Alumno/a</th>' +
+      crits.map(function (cod) { return '<th title="' + esc(idx[cod] ? idx[cod].doc : '') + '">' + esc(cod) + '</th>'; }).join('') + '</tr></thead><tbody>';
+    als.forEach(function (al) {
+      var fb = Model.getFeedback(a.id, al.id);
+      var fbBtn = '<button class="mini" style="padding:1px 6px;margin-left:4px" title="' +
+        (fb ? 'Ver/editar el feedback de esta actividad' : 'Añadir feedback para esta actividad') +
+        '" onclick="App.modalFeedback(\'' + a.id + '\',\'' + al.id + '\')">💬' + (fb ? ' •' : '') + '</button>';
+      h += '<tr><td class="nombre">' + esc(al.nombre) + fbBtn + '</td>' +
+        crits.map(function (cod) { return '<td>' + cell(a, al.id, cod, Model.getEval(a.id, al.id, cod)) + '</td>'; }).join('') + '</tr>';
+    });
+    return h + '</tbody></table></div>';
+  }
+
+  // ---------- RÚBRICAS (banco) ----------
+  function rubricas() {
+    var st = Model.getState();
+    var h = '<h2 class="section">Rúbricas <button class="primary" title="Crear una rúbrica con descriptores por nivel (puedes pegarla desde ChatGPT/Excel)" onclick="App.modalRubrica()">+ Nueva rúbrica</button></h2>' +
+      '<div class="hint">Banco de rúbricas reutilizables. Cada rúbrica describe los 5 niveles y se puede asignar a una actividad de tipo «Niveles». Puedes pegarla desde ChatGPT/Excel.</div>';
+    if (!st.rubricas.length) return h + '<div class="empty">Aún no tienes rúbricas.</div>';
+    return h + cardsGrid(st.rubricas.map(function (r) {
+      return '<div class="card" onclick="App.modalRubrica(\'' + r.id + '\')">' +
+        '<button class="del" title="Borrar" onclick="event.stopPropagation();App.delRubrica(\'' + r.id + '\')">✕</button>' +
+        '<h3>' + esc(r.nombre) + '</h3><div class="meta">' + esc((r.niveles.so || r.niveles.no || '').slice(0, 70)) + '…</div></div>';
+    }));
+  }
+
+  // ---------- COMPARATIVA (nota media entre clases de la misma materia) ----------
+  function comparativa() {
+    var st = Model.getState();
+    var porArea = {};
+    st.clases.forEach(function (c) { (porArea[c.area] = porArea[c.area] || []).push(c); });
+    var areas = Object.keys(porArea);
+    var h = '<h2 class="section">📊 Comparativa entre clases</h2>' +
+      '<div class="hint">Nota media de cada clase, por competencia y nota final. Útil para comparar grupos que cursan la misma materia. Pulsa en el nombre de una clase para entrar en ella.</div>';
+    if (!areas.length) return h + '<div class="empty">Aún no tienes clases.</div>';
+
+    areas.forEach(function (areaKey) {
+      var area = Seed.AREAS[areaKey]; if (!area) return;
+      var def = Seed.toEngineDef(area), clasesArea = porArea[areaKey];
+      h += '<h3 style="margin:20px 0 6px;font-size:15px">' + esc(area.nombre) + '</h3>';
+      h += '<div class="wrap"><table class="grid"><thead><tr><th class="nombre">Clase</th><th>Alumnado</th>' +
+        area.competencias.map(function (comp) {
+          return '<th style="cursor:help" title="' + esc('CE' + comp.ce + ' · ' + comp.nombre) + '">CE' + comp.ce + '</th>';
+        }).join('') + '<th>Nota final</th></tr></thead><tbody>';
+      clasesArea.forEach(function (c) {
+        var g = Model.grupo(c.grupoId), als = Model.alumnosDe(c.id);
+        var resultados = als.map(function (al) { return Engine.computeAlumno(def, Model.evalsAlumnoClase(c.id, al.id)); });
+        var mediaCE = area.competencias.map(function (comp) {
+          var vals = resultados.map(function (r) {
+            var x = r.perCE.filter(function (y) { return y.ce === comp.ce; })[0];
+            return x ? x.nota : null;
+          }).filter(function (v) { return v != null; });
+          return Engine.mean(vals);
+        });
+        var mediaFinal = Engine.mean(resultados.map(function (r) { return r.final; }).filter(function (v) { return v != null; }));
+        h += '<tr><td class="nombre"><a onclick="App.openClase(\'' + c.id + '\')" style="cursor:pointer;color:var(--acento-osc)">' +
+          esc(g ? g.nombre : '?') + '</a></td><td>' + als.length + '</td>' +
+          mediaCE.map(function (n) { return '<td class="nota ' + claseNota(n) + '">' + Engine.fmt(n) + '</td>'; }).join('') +
+          '<td class="nota ' + claseNota(mediaFinal) + '">' + Engine.fmt(mediaFinal) + '</td></tr>';
+      });
+      h += '</tbody></table></div>';
+    });
+    return h;
+  }
+
+  // ---------- RESUMEN ----------
+  function resumen(claseId) {
+    var c = Model.clase(claseId), g = Model.grupo(c.grupoId), als = Model.alumnosDe(c.id);
+    var area = Seed.AREAS[c.area], def = Seed.toEngineDef(area), idx = critIndex(c.area);
+    var allCods = [];
+    area.competencias.forEach(function (comp) { comp.criterios.forEach(function (cr) { allCods.push(cr.cod); }); });
+    var h = '<div class="crumbs"><a onclick="App.go(\'clases\')">Clases</a> › <a onclick="App.openClase(\'' + c.id + '\')">' + esc(g.nombre) + '</a> › Resumen</div>' +
+      '<h2 class="section">Resumen · ' + esc(g.nombre) + ' · ' + esc(c.area) +
+      ' <button class="ghost" title="Copiar toda la tabla de notas al portapapeles, para pegarla en una hoja, Séneca o Classroom" onclick="App.copiarResumen(\'' + c.id + '\')">📋 Copiar tabla</button></h2>' +
+      '<div class="hint">Nota por criterio, por competencia (CE) y nota final. El transversal (T) pondera un 10% dentro de cada CE.</div>';
+    if (!als.length) return h + '<div class="empty">El grupo no tiene alumnado.</div>';
+    h += '<div class="wrap"><table class="grid"><thead><tr><th class="nombre">Alumno/a</th>' +
+      allCods.map(function (cod) { return '<th title="' + esc(idx[cod] ? idx[cod].doc : '') + '">' + esc(cod) + '</th>'; }).join('') +
+      area.competencias.map(function (comp) { return '<th style="cursor:help" title="' + esc('CE' + comp.ce + ' · ' + comp.nombre + (comp.enun ? ' — ' + comp.enun : '')) + '">CE' + comp.ce + '</th>'; }).join('') +
+      '<th title="' + esc(idx['T'] ? idx['T'].doc : 'Trabajo') + '">T</th><th>Nota final</th></tr></thead><tbody>';
+    als.forEach(function (al) {
+      var r = Engine.computeAlumno(def, Model.evalsAlumnoClase(c.id, al.id));
+      h += '<tr><td class="nombre">' + esc(al.nombre) +
+        ' <button class="mini" style="padding:1px 6px" title="Informe individual con trazabilidad" onclick="App.informeAlumno(\'' + c.id + '\',\'' + al.id + '\')">📄</button>' +
+        ' <button class="mini" style="padding:1px 6px" title="Ver la evolución de sus notas por criterio a lo largo del tiempo" onclick="App.modalEvolucion(\'' + c.id + '\',\'' + al.id + '\')">📈</button></td>';
+      allCods.forEach(function (cod) { var n = r.perCriterio[cod]; h += '<td class="nota ' + claseNota(n) + '">' + Engine.fmt(n) + '</td>'; });
+      r.perCE.forEach(function (x) { h += '<td class="nota ' + claseNota(x.nota) + '">' + Engine.fmt(x.nota) + '</td>'; });
+      h += '<td class="nota ' + claseNota(r.perCriterio['T']) + '">' + Engine.fmt(r.perCriterio['T']) + '</td>';
+      h += '<td class="nota ' + claseNota(r.final) + '">' + Engine.fmt(r.final) + '</td></tr>';
+    });
+    return h + '</tbody></table></div>';
+  }
+
+  // ---------- ASISTENCIA (pasar lista) ----------
+  var ASIST = { F: { label: 'Falta', cls: 'lv-ne' }, J: { label: 'Justif.', cls: 'lv-su' } };
+  function fechaBonita(f) {
+    var d = new Date(f + 'T00:00:00');
+    return d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+  }
+  function asistencia(claseId, fecha) {
+    var c = Model.clase(claseId), g = Model.grupo(c.grupoId), als = Model.alumnosDe(c.id);
+    var h = '<div class="crumbs"><a onclick="App.go(\'clases\')">Clases</a> › <a onclick="App.openClase(\'' + c.id + '\')">' + esc(g.nombre) + ' · ' + esc(c.area) + '</a> › Pasar lista</div>' +
+      '<h2 class="section">🗓 Pasar lista' +
+      ' <button class="mini" title="Día anterior" onclick="App.asistShift(-1)">◀</button>' +
+      ' <b>' + esc(fechaBonita(fecha)) + '</b>' +
+      ' <button class="mini" title="Día siguiente" onclick="App.asistShift(1)">▶</button>' +
+      ' <button class="mini" title="Ir al día de hoy" onclick="App.asistHoy()">Hoy</button></h2>' +
+      '<div class="hint">Todos empiezan como <b>Presente</b>. Toca el botón de cada alumno/a para marcar Falta → Justificada → Presente. Al lado ves su total de faltas.</div>';
+    if (!als.length) return h + '<div class="empty">El grupo no tiene alumnado.</div>';
+    h += '<div class="cards">';
+    als.forEach(function (al) {
+      var e = Model.getAsistencia(c.id, fecha, al.id), f = Model.faltas(c.id, al.id);
+      var estado = e ? ASIST[e] : { label: 'Presente', cls: 'lv-no' };
+      h += '<div class="card" style="cursor:default"><h3 style="font-size:15px">' + esc(al.nombre) + '</h3>' +
+        '<div class="meta">Faltas: <b>' + f.total + '</b>' + (f.J ? ' (' + f.J + ' justif.)' : '') + '</div>' +
+        '<button class="lvl ' + estado.cls + '" title="Toca para cambiar el estado: Presente → Falta → Justificada" style="margin-top:8px;width:100%;border:0;color:#fff;padding:10px;border-radius:8px;cursor:pointer;font-weight:700" ' +
+        'onclick="App.toggleAsist(\'' + al.id + '\')">' + estado.label + '</button></div>';
+    });
+    return h + '</div>';
+  }
+
+  // ---------- AGENDA / PLANIFICADOR (vista semanal) ----------
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function isoOf(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+  function diaLargo(d) { return d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short' }); }
+
+  var TIPO_ENTRADA = { sesion: { et: 'Sesión', col: null }, reunion: { et: 'Reunión', col: '#8e44ad' }, tarea: { et: 'Tarea', col: '#e67e22' } };
+
+  function entradaCard(e) {
+    var col = TIPO_ENTRADA[e.tipo].col, titulo, sub = '';
+    if (e.tipo === 'sesion') {
+      var c = Model.clase(e.claseId), g = c && Model.grupo(c.grupoId);
+      col = c ? c.color : '#1f7a5c';
+      titulo = c ? (esc(g.nombre) + ' · ' + esc(c.area)) : 'Sesión';
+      if (e.plan) sub += esc(e.plan);
+      if (e.diario) sub += (sub ? '<br>' : '') + '<span style="color:var(--verde-osc)">✓ ' + esc(e.diario) + '</span>';
+    } else if (e.tipo === 'reunion') {
+      titulo = '📅 ' + esc(e.titulo || 'Reunión');
+      sub = esc(e.plan || '');
+    } else {
+      titulo = (e.done ? '☑ ' : '☐ ') + '<span' + (e.done ? ' style="text-decoration:line-through;color:var(--suave)"' : '') + '>' + esc(e.titulo || 'Tarea') + '</span>';
+      sub = esc(e.plan || '');
+    }
+    var checkbox = e.tipo === 'tarea'
+      ? '<button class="del" title="Marcar la tarea como hecha o pendiente" style="left:8px;right:auto;opacity:.8;font-size:16px" onclick="event.stopPropagation();App.toggleTarea(\'' + e.id + '\')">' + (e.done ? '☑' : '☐') + '</button>' : '';
+    return '<div class="card" style="border-left:4px solid ' + col + ';margin:6px 0;cursor:pointer;padding:10px 12px' + (e.tipo === 'tarea' ? ';padding-left:34px' : '') + '" onclick="App.abrirEntrada(\'' + e.id + '\')">' +
+      checkbox +
+      '<button class="del" title="Borrar" onclick="event.stopPropagation();App.delEntrada(\'' + e.id + '\')">✕</button>' +
+      '<div style="font-weight:600;font-size:14px">' + titulo + '</div>' +
+      (sub ? '<div class="meta" style="margin-top:2px">' + sub + '</div>' : '') + '</div>';
+  }
+
+  function chipMes(e) {
+    var c = e.tipo === 'sesion' ? Model.clase(e.claseId) : null;
+    var col = e.tipo === 'sesion' ? (c ? c.color : '#1f7a5c') : TIPO_ENTRADA[e.tipo].col;
+    var txt = e.tipo === 'sesion' ? (c ? Model.grupo(c.grupoId).nombre : 'Sesión') : (e.titulo || TIPO_ENTRADA[e.tipo].et);
+    return '<div onclick="event.stopPropagation();App.abrirEntrada(\'' + e.id + '\')" title="' + esc(txt) + '" ' +
+      'style="cursor:pointer;font-size:11px;margin-top:2px;padding:1px 5px;border-radius:4px;color:#fff;background:' + col + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' +
+      (e.tipo === 'tarea' && e.done ? '✓ ' : '') + esc(txt) + '</div>';
+  }
+  function mesGrid(anchorISO) {
+    var a = new Date(anchorISO + 'T00:00:00'), y = a.getFullYear(), m = a.getMonth();
+    var startWd = (new Date(y, m, 1).getDay() + 6) % 7;
+    var cur = new Date(y, m, 1 - startWd), hoyISO = isoOf(new Date());
+    var dows = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+    var h = '<div class="wrap"><table class="grid mescal"><thead><tr>' + dows.map(function (x) { return '<th>' + x + '</th>'; }).join('') + '</tr></thead><tbody>';
+    for (var wk = 0; wk < 6; wk++) {
+      h += '<tr>';
+      for (var dd = 0; dd < 7; dd++) {
+        var iso = isoOf(cur), inMonth = (cur.getMonth() === m), es = Model.entradasEntre(iso, iso);
+        h += '<td class="mescell' + (inMonth ? '' : ' fuera') + (iso === hoyISO ? ' hoy' : '') + '">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center">' +
+          '<span style="font-weight:600;font-size:12px">' + cur.getDate() + '</span>' +
+          '<button class="mini" title="Añadir una entrada a este día" style="padding:0 6px" onclick="App.modalEntrada(\'' + iso + '\')">+</button></div>' +
+          es.slice(0, 4).map(chipMes).join('') +
+          (es.length > 4 ? '<div class="meta" style="font-size:10px">+' + (es.length - 4) + '…</div>' : '') + '</td>';
+        cur.setDate(cur.getDate() + 1);
+      }
+      h += '</tr>';
+    }
+    return h + '</tbody></table></div>';
+  }
+  function weekList(lunesISO) {
+    var lunes = new Date(lunesISO + 'T00:00:00'), hoyISO = isoOf(new Date()), h = '';
+    for (var i = 0; i < 7; i++) {
+      var d = new Date(lunes); d.setDate(lunes.getDate() + i);
+      var iso = isoOf(d), es = Model.entradasEntre(iso, iso), finde = (d.getDay() === 0 || d.getDay() === 6), esHoy = (iso === hoyISO);
+      h += '<div style="margin-top:14px;' + (finde ? 'opacity:.75;' : '') + '">' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+        '<span style="font-weight:700;text-transform:capitalize' + (esHoy ? ';color:var(--verde-osc)' : '') + '">' + diaLargo(d) + (esHoy ? ' · hoy' : '') + '</span>' +
+        '<button class="mini" title="Añadir una sesión de clase, una reunión o una tarea a este día" onclick="App.modalEntrada(\'' + iso + '\')">+ añadir</button></div>';
+      h += es.length ? es.map(entradaCard).join('') : '<div class="meta" style="margin:4px 0 0 2px">—</div>';
+      h += '</div>';
+    }
+    return h;
+  }
+  function agenda(anchorISO, mode) {
+    mode = mode || 'semana';
+    var a = new Date(anchorISO + 'T00:00:00');
+    var lunes = new Date(a); lunes.setDate(a.getDate() - ((a.getDay() + 6) % 7));
+    var dom = new Date(lunes); dom.setDate(lunes.getDate() + 6);
+    var titulo = (mode === 'mes')
+      ? a.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })
+      : 'Semana del ' + lunes.getDate() + ' al ' + dom.getDate() + ' ' + dom.toLocaleDateString('es-ES', { month: 'long' });
+    var paso = (mode === 'mes') ? 'App.agendaMes' : 'App.agendaShift';
+    var arg1 = (mode === 'mes') ? '-1' : '-7', arg2 = (mode === 'mes') ? '1' : '7';
+    var tog = function (m, et) { return '<button class="mini" title="Ver ' + (m === 'mes' ? 'el mes completo en calendario' : 'la semana') + '"' + (mode === m ? ' style="background:var(--verde-cl);color:var(--verde-osc)"' : '') + ' onclick="App.setAgendaMode(\'' + m + '\')">' + et + '</button>'; };
+    var h = '<h2 class="section">🗓 Planificador ' + tog('semana', 'Semana') + ' ' + tog('mes', 'Mes') +
+      ' <button class="mini" title="' + (mode === 'mes' ? 'Mes anterior' : 'Semana anterior') + '" onclick="' + paso + '(' + arg1 + ')">◀</button>' +
+      ' <b style="text-transform:capitalize">' + titulo + '</b>' +
+      ' <button class="mini" title="' + (mode === 'mes' ? 'Mes siguiente' : 'Semana siguiente') + '" onclick="' + paso + '(' + arg2 + ')">▶</button>' +
+      ' <button class="mini" title="Ir a la fecha de hoy" onclick="App.agendaHoy()">Hoy</button>' +
+      ' <button class="ghost" title="Generar un PDF con el diario de aula y las reuniones del mes que ves" onclick="App.resumenPDF()">📄 Resumen PDF</button></h2>' +
+      '<div class="hint">Añade en cada día una <b>sesión</b> (qué darás y luego qué se hizo), una <b>reunión</b> o una <b>tarea</b>. El <b>Resumen PDF</b> recoge el diario de aula y las reuniones del mes que ves.</div>';
+    return h + (mode === 'mes' ? mesGrid(anchorISO) : weekList(anchorISO));
+  }
+
+  root.UI = {
+    esc: esc, critIndex: critIndex,
+    grupos: grupos, clases: clases, clase: clase, proyecto: proyecto, actividad: actividad, resumen: resumen, rubricas: rubricas, asistencia: asistencia, agenda: agenda, comparativa: comparativa,
+    nivelesCellInner: nivelesCellInner
+  };
+})(typeof window !== 'undefined' ? window : this);
+</script>
